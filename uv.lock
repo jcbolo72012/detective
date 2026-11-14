@@ -1264,7 +1264,7 @@ requires-dist = [
     { name = "requests" },
     { name = "scikit-learn" },
     { name = "scipy" },
-    { name = "streamlit", specifier = ">=1.32" },
+    { name = "streamlit", specifier = ">=1.50" },
     { name = "torch", marker = "extra == 'lstm'" },
 ]
 provides-extras = ["openai", "tracking", "lstm"]
