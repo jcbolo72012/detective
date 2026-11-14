@@ -3,6 +3,8 @@ import re
 
 import pandas as pd
 
+import providers
+
 GROUPS = [  # (group, pattern on name + definition). First match wins.
     ("Temperature", r"temperature|dew|frost|degree days|heating|cooling"),
     ("Water", r"precipitation|precipitable|rain|humidity|wetness|soil|snow|evapo|moisture"),
@@ -23,13 +25,13 @@ def build_table(all_vars, curated):
     """all_vars: retrieve.ALL, curated: catalog.VARIABLES -> DataFrame, featured first."""
     rows = []
     for code, v in all_vars.items():
-        gio = v.get("provider") == "giovanni"
+        ext = bool(v.get("provider")) and v["provider"] != "power"
         rows.append(dict(
             Variable=v["name"], Code=code, Units=v.get("units", ""),
-            Source="NASA Giovanni" if gio else "NASA POWER",
+            Source=providers.LABELS.get(v.get("provider") or "power", "NASA POWER"),
             Group=group_of(v["name"], f"{v.get('definition', '')} {' '.join(v.get('keywords') or [])}"),
             Featured=code in curated,
-            Hourly=(not gio) and bool(HOURLY.search(code) or HOURLY.search(v["name"])) and code not in curated,
+            Hourly=(not ext) and bool(HOURLY.search(code) or HOURLY.search(v["name"])) and code not in curated,
             Definition=v.get("definition", "")))
     df = pd.DataFrame(rows)
     return df.sort_values(["Featured", "Group", "Variable"], ascending=[False, True, True]).reset_index(drop=True)

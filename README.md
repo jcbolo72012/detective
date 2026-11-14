@@ -24,6 +24,8 @@ Push to GitHub, create the app with main file `app.py`, and paste `.streamlit/se
 ## Data and credits
 - **NASA POWER** (Prediction Of Worldwide Energy Resources), https://power.larc.nasa.gov, NASA Langley Research Center. Data are open; please credit NASA.
 - **NASA GES DISC Giovanni**, https://giovanni.gsfc.nasa.gov, for the case-file time series.
+- **NASA PO.DAAC**, https://podaac.jpl.nasa.gov, for ocean variables: sea surface temperature (NOAA ERSST v5, distributed by PO.DAAC) and sea level anomaly (NASA-SSH). Needs your Earthdata token.
+- **NASA GIBS / Worldview**, https://worldview.earthdata.nasa.gov, for the "See it from space" images and links. No login.
 - **GeoNames** city, country and region data (via the `geonamescache` package), https://www.geonames.org, licensed CC BY 4.0.
 - `data/demo_ozone_SYNTHETIC.csv` is synthetic and labeled as such in the app.
 
@@ -34,3 +36,7 @@ Single grid points (about 50 km) stand in for places; countries and states use t
 Add a free Earthdata token under "NASA Giovanni" in the sidebar and Giovanni's satellite and model variables (dust, ozone, snow, soil moisture, pollution...) join NASA POWER in every mode: questions, comparisons, menus and the variable explorer. Data come live from NASA's Giovanni in the Cloud time series service. The token stays in the browser session only: never stored, cached, or logged, and sent only to NASA. Data: NASA GES DISC; credit NASA when sharing results.
 
 Variable list: `python -m uv run python giovanni_catalog.py --build` downloads NASA's list of configured variables into `giovanni_vars.json` (commit it). Without it a small starter list is used.
+
+The same Earthdata token also unlocks two ocean variables from **NASA PO.DAAC** (`podaac.py`): sea surface temperature and sea level. They are read straight from PO.DAAC's cloud OPeNDAP server, one small request per month of record, so the first look at a place takes about a minute (20 years by default) and is then cached for a day. They are ocean-only: a coastal place uses the nearest open-ocean grid cell, and says so. Sea level is one 5-day satellite map per month (nearest the 15th), not a monthly mean.
+
+Each investigation also has a **See it from space** panel (`space_view.py`): a NASA Worldview link and first-year vs last-year GIBS images for the place. These need no login and are context only, not evidence for the trend.

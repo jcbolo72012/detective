@@ -15,7 +15,6 @@ it runs on TF-IDF alone.
 import contextvars
 import difflib
 import fnmatch
-import functools
 import hashlib
 import json
 import os
@@ -29,6 +28,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import linear_kernel
 
 import giovanni_catalog
+import providers
 from catalog import VARIABLES
 from explorer import HOURLY
 from lexicon import LEXICON
@@ -64,11 +64,17 @@ def load_all():
             allv.update({k: {**v, "keywords": []} for k, v in json.load(f).items()})
     allv.update(VARIABLES)
     allv.update(giovanni_catalog.load())  # keys start with "GIO:", so they never clash
+    allv.update(providers.external_catalogs())  # "POD:..." (PO.DAAC)
     return allv
 
 
 def is_giovanni(code):
     return str(code).startswith(giovanni_catalog.PREFIX)
+
+
+def is_external(code):
+    """Not a NASA POWER code: needs the user's Earthdata token (Giovanni, PO.DAAC)."""
+    return providers.provider_of(code) != "power"
 
 
 # Per browser session (Streamlit runs each session in its own context): are Giovanni variables usable?
@@ -104,7 +110,7 @@ def stem(text):
 ALL = load_all()
 # hour-by-hour variants (about 1,100 near-duplicates) stay in ALL but are not searched
 _ids = [k for k, v in ALL.items()
-        if k in VARIABLES or is_giovanni(k) or not (HOURLY.search(k) or HOURLY.search(v['name']))]
+        if k in VARIABLES or is_external(k) or not (HOURLY.search(k) or HOURLY.search(v['name']))]
 
 
 def _keywords(k):
@@ -138,7 +144,7 @@ for _i, (_o, _e) in enumerate(zip(_own, _extra)):
             _aliases.setdefault(_s, set()).add(_i)
 
 _WORDS = sorted({w for k in _ids for w in re.findall(r"[a-z]{4,}", f"{ALL[k]['name']} {' '.join(_kw[k])} "
-                 f"{'' if is_giovanni(k) else ALL[k]['definition']}".lower()) if w not in STOP})
+                 f"{'' if is_external(k) else ALL[k]['definition']}".lower()) if w not in STOP})
 _WORD_SET = set(_WORDS)
 
 
@@ -192,34 +198,70 @@ def _load_embeddings():
 
 
 _EMB = _load_embeddings()
-_model, _model_failed, _model_lock = None, False, threading.Lock()
+
+# The question encoder is loaded in the background. A question never waits for it: until it is ready (or if it
+# can't be downloaded, which fastembed retries for about a minute), search answers on TF-IDF alone.
+_model, _model_lock, _model_ready = None, threading.Lock(), threading.Event()
+_model_state = {"status": "off" if _EMB is None else "loading", "error": None}
+MODEL_RETRY_S = 300   # after a failed download, try again this long later (the app may be mid-cold-start)
+_emb_cache = {}       # question -> vector; only successes are kept, so a miss while loading is retried later
 
 
-@functools.lru_cache(maxsize=512)
-def _embed(text):
-    global _model, _model_failed
-    if _model_failed:
+def _load_model():
+    """Load the encoder once; on failure retry every MODEL_RETRY_S seconds. Runs in a daemon thread."""
+    global _model
+    while _model is None:
+        try:
+            from fastembed import TextEmbedding
+            m = TextEmbedding(EMB_MODEL)
+            next(iter(m.embed(["warm up"])))
+            _model = m
+            _model_state.update(status="ready", error=None)
+            _model_ready.set()
+        except Exception as e:  # offline, no disk, HuggingFace down: stay on TF-IDF and try later
+            _model_state.update(status="failed", error=f"{type(e).__name__}: {e}"[:200])
+            if _model_ready.wait(MODEL_RETRY_S):
+                return
+
+
+def model_status():
+    """'ready' | 'loading' | 'failed' | 'off' (no embedding file): for the sidebar and debugging."""
+    return _model_state["status"]
+
+
+def wait_for_model(timeout=180):
+    """Block until the encoder is ready (eval and scripts only; the app never calls this). True if ready."""
+    return _model_ready.wait(timeout)
+
+
+def _embed(text, wait=False):
+    """Unit vector for `text`, or None when the encoder isn't ready yet (never blocks unless wait=True)."""
+    v = _emb_cache.get(text)
+    if v is not None:
+        return v
+    if _model is None and not (wait and wait_for_model()):
         return None
     try:
-        with _model_lock:
-            if _model is None:
-                from fastembed import TextEmbedding
-                _model = TextEmbedding(EMB_MODEL)
+        with _model_lock:  # short: one sentence through a small ONNX model
             v = next(iter(_model.embed([text])))
-        return v / np.linalg.norm(v)
-    except Exception:  # offline, no disk, model missing: keep working on TF-IDF
-        _model_failed = True
+    except Exception:
         return None
+    v = v / np.linalg.norm(v)
+    if len(_emb_cache) > 2000:
+        _emb_cache.clear()
+    _emb_cache[text] = v
+    return v
 
 
-if _EMB is not None:  # load the model in the background so the first question doesn't wait for it
-    threading.Thread(target=_embed, args=("warm up",), daemon=True).start()
+if _EMB is not None:
+    threading.Thread(target=_load_model, name="embedding-model", daemon=True).start()
 
 
 STEP_WEIGHT = {"monthly": 1.0, "weekly": 0.98, "daily": 0.97, "3-hourly": 0.92, "hourly": 0.88, "half-hourly": 0.82}
 
 
 GIO_BASE = 0.7
+PODAAC_BASE = 1.0
 VARIANT_PENALTY = 0.92   # _SD/_MAX/_MIN/_AVG versions and wind components: prefer the base variable
 VARIANT = re.compile(r"(_SD|_MAX|_MIN|_AVG|_SUM|_PRCNTL)$|^[UV]\d+M$")
 
@@ -237,6 +279,8 @@ def _weight(code, gio_on):
         if v.get("region"):  # regional datasets (North America only, ...) lose to global ones
             w *= 0.9
         return w
+    if is_external(code):  # PO.DAAC: needs the token; ocean variables, so no POWER twin that should win ties
+        return PODAAC_BASE if gio_on else 0.0
     return VARIANT_PENALTY if VARIANT.search(code) else 1.0
 
 
@@ -254,7 +298,8 @@ def search(question, k=5, min_score=0.03, giovanni=None, hybrid=None):
         if f" {phrase} " in padded:
             lex[list(idx)] += ALIAS_BOOST
     lex *= w
-    q_emb = _embed(question) if _EMB is not None and (USE_HYBRID if hybrid is None else hybrid) else None
+    # hybrid=True (eval) waits for the encoder; the default (the app) never does
+    q_emb = _embed(question, wait=hybrid is True) if _EMB is not None and (USE_HYBRID if hybrid is None else hybrid) else None
     if q_emb is None:
         ranked = [(_ids[i], lex[i]) for i in np.argsort(-lex) if lex[i] >= min_score]
     else:
@@ -275,7 +320,7 @@ def search(question, k=5, min_score=0.03, giovanni=None, hybrid=None):
     for i, s in ranked:
         if len(out) >= k:
             break
-        name = ALL[i].get("short_name") if is_giovanni(i) else None
+        name = ALL[i].get("short_name") if is_external(i) else None
         if name and name in seen:  # same variable from another product/version: keep only the best one
             continue
         seen.add(name)

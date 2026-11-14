@@ -37,5 +37,8 @@
  {"q": "Is carbon dioxide concentration climbing?", "g": [["GIO:*XCO2"]], "t": ["giovanni"], "gio": true},
  {"q": "Is the water table dropping in California?", "g": [["GIO:*GWS_tavg", "GIO:*gws_inst", "GIO:*TWS_tavg"]], "t": ["giovanni", "hard"], "gio": true},
  {"q": "Is NO2 air pollution falling in Los Angeles?", "g": [["GIO:*NO2*"]], "t": ["giovanni"], "gio": true},
- {"q": "Is algae growing in the Gulf of Mexico?", "g": [["GIO:*chl"]], "t": ["giovanni", "hard"], "gio": true}
+ {"q": "Is algae growing in the Gulf of Mexico?", "g": [["GIO:*chl"]], "t": ["giovanni", "hard"], "gio": true},
+ {"q": "Are coastal waters near Lisbon getting warmer?", "g": [["POD:SST"]], "t": ["podaac"], "gio": true},
+ {"q": "How much higher is the sea around Mumbai than before?", "g": [["POD:SSH"]], "t": ["podaac", "hard"], "gio": true},
+ {"q": "Is there a marine heatwave off California?", "g": [["POD:SST"]], "t": ["podaac", "hard"], "gio": true}
 ]

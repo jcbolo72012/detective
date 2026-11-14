@@ -7,6 +7,7 @@ import os
 import re
 
 import geo
+import providers
 from catalog import PLACES, RELATED
 from catalog import VARIABLES as CURATED
 from power import LAST_FULL_YEAR
@@ -91,9 +92,9 @@ def _giovanni_hint(q):
         hits = search_question(q, k=1, giovanni=True)
     except TypeError:
         return None
-    if hits and str(hits[0][0]).startswith("GIO:"):
-        return (f"That sounds like **{VARIABLES[hits[0][0]]['name']}**, which comes from NASA Giovanni. Add your "
-                "free Earthdata token under 'NASA Giovanni' in the sidebar to investigate it.")
+    if hits and providers.needs_token(hits[0][0]):
+        return (f"That sounds like **{VARIABLES[hits[0][0]]['name']}**, which comes from {providers.label_of(hits[0][0])}. "
+                "Add your free Earthdata token under 'NASA Giovanni' in the sidebar to investigate it.")
     return None
 
 
@@ -113,13 +114,15 @@ def validate(p, question=None):
         season = None
     first, last = 1981, LAST_FULL_YEAR
     v = VARIABLES[p["variable"]]
-    if v.get("provider") == "giovanni":  # each Giovanni dataset has its own record (GLDAS 2.0: 1948-2014, OMI: 2005-)
+    if v.get("provider") in ("giovanni", "podaac"):  # each dataset has its own record (GLDAS 2.0: 1948-2014, OMI: 2005-)
         first = max(1948, int(v.get("first_year") or 1980))
         last = min(LAST_FULL_YEAR, int(v.get("last_year") or LAST_FULL_YEAR))
         if not p.get("start_year"):
             default = first
             if v.get("step") in ("hourly", "half-hourly"):  # big downloads: default to the last 20 years
                 default = max(first, last - 19)
+            if v.get("default_years"):  # many small requests per month of record: keep the default window short
+                default = max(first, last - int(v["default_years"]) + 1)
             p = {**p, "start_year": default}
     span = min(10, max(1, last - first))
     start = min(max(int(p.get("start_year") or first), first), last - span)
@@ -178,7 +181,7 @@ def parse_question(q):
     m = re.search(r"\{.*\}", txt, re.S)
     if not m:
         raise ValueError("The AI didn't return parameters. Try rephrasing, or use the menus.")
-    p = validate(json.loads(m.group(0)))
+    p = validate(json.loads(m.group(0)), q)
     if p["variable"] not in dict(hits):
         raise ValueError("The AI picked a variable outside the retrieved candidates. Try rephrasing.")
     return {**p, "candidates": hits, "place_alts": []}, True

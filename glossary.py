@@ -52,6 +52,15 @@ TERMS = {
     "mae": ("Test MAE",
         "Mean absolute error on the held-out years: the average size of the model's miss, in the data's units. "
         "Lower is better."),
+    "skill": ("Skill",
+        "How much better a forecast is than simply repeating last year's values: 0% means no better, 100% means "
+        "perfect, negative means worse. Measured on backtests, never on data the model trained on."),
+    "backtest": ("Backtest",
+        "Pretend it's an earlier year: hide everything after that date, forecast the next two years, then compare "
+        "with what really happened. Doing it from several dates shows whether a model's success was luck."),
+    "band": ("Forecast band",
+        "The shaded range around a projection, built from how wrong the model actually was in its backtests. "
+        "It widens further out because forecasts get less certain the further ahead they reach."),
     "holdout": ("Held-out test",
         "The last part of the record is hidden while the model trains, then used to check its predictions. A model "
         "that only looks good on data it has already seen proves nothing."),

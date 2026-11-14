@@ -85,5 +85,10 @@
  {"q": "Is nitrogen dioxide pollution falling over China?", "g": [["GIO:*NO2*"]], "t": ["giovanni", "hard"], "gio": true},
  {"q": "Is North America getting warmer?", "g": [["T2M", "T2M_MAX", "T2M_MIN", "GIO:*Tair_f_tavg", "GIO:*SurfAirTemp_A", "GIO:*SurfAirTemp_D"]], "t": ["giovanni", "place-noise"], "gio": true},
  {"q": "Is Central Asia getting drier?", "g": [["PRECTOTCORR", "GWETROOT", "GWETTOP", "GWETPROF", "GIO:*SoilMoi*", "GIO:*SoilMoist*"]], "t": ["giovanni", "place-noise"], "gio": true},
- {"q": "Is rain getting heavier over the Amazon?", "g": [["PRECTOTCORR", "IMERG_PRECTOT", "GIO:*precipitation", "GIO:*precip", "GIO:*Rainf_f_tavg"]], "t": ["giovanni", "place-noise"], "gio": true}
+ {"q": "Is rain getting heavier over the Amazon?", "g": [["PRECTOTCORR", "IMERG_PRECTOT", "GIO:*precipitation", "GIO:*precip", "GIO:*Rainf_f_tavg"]], "t": ["giovanni", "place-noise"], "gio": true},
+ {"q": "Is the ocean warming off Perth?", "g": [["POD:SST"]], "t": ["podaac"], "gio": true},
+ {"q": "Is the sea level rising near Honolulu?", "g": [["POD:SSH"]], "t": ["podaac"], "gio": true},
+ {"q": "Are sea surface temperatures climbing near Miami?", "g": [["POD:SST"]], "t": ["podaac"], "gio": true},
+ {"q": "Are the seas rising around Jakarta?", "g": [["POD:SSH"]], "t": ["podaac"], "gio": true},
+ {"q": "Is the ocean getting warmer and the sea level higher near Tokyo?", "g": [["POD:SST"], ["POD:SSH"]], "t": ["podaac", "multi"], "gio": true}
 ]

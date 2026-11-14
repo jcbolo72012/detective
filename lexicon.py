@@ -81,4 +81,10 @@ LEXICON = {
     "GIO:*chl": ["chlorophyll", "algae", "phytoplankton", "ocean greenness", "algal bloom", "plankton"],
     "GIO:*TotO3_*": ["ozone", "ozone layer", "ozone hole"],
     "GIO:*TO3": ["ozone", "ozone layer", "ozone hole"],
+
+    "POD:SST": ["sea surface temperature", "sst", "ocean temperature", "ocean warming", "warming oceans",
+                "marine heatwave", "sea temperature", "water temperature", "warmer seas", "coral bleaching",
+                "el nino", "la nina", "ocean heat"],
+    "POD:SSH": ["sea level", "sea level rise", "rising seas", "rising sea level", "ocean height", "sea surface height",
+                "coastal flooding", "ocean rise", "altimetry", "seas rising"],
 }

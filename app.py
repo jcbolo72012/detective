@@ -21,6 +21,7 @@ except Exception:  # older Streamlit or test stub
 import compare
 import explorer
 import forecast_client
+import forecast_lstm
 import glossary
 import geo
 import giovanni
@@ -29,9 +30,16 @@ import giovanni_live
 import retrieve
 import nl
 import power
+import providers
+import space_view
 from catalog import DEMO_QUESTIONS, PLACES, VARIABLES
 from retrieve import ALL, search
 from trend_detective import analyze, load_giovanni_csv
+
+try:
+    import podaac
+except ImportError:  # netCDF4 not installed: the PO.DAAC ocean variables are simply not offered
+    podaac = None
 
 try:
     import mlflow
@@ -54,6 +62,13 @@ def _giovanni_series(gid, lat, lon, start, end, step, _token):
     """_token starts with an underscore so Streamlit never hashes or stores it as part of the cache key."""
     got = giovanni_live.fetch(gid, lat, lon, start, end, _token, step=step)
     return got["series"], got["meta"].get("display_units") or "", got["note"]
+
+
+@st.cache_data(show_spinner=False, ttl=24 * 3600, max_entries=100)
+def _podaac_series(code, lat, lon, start, end, _token):
+    """One request per month of record, so results are cached for a day. _token is not part of the cache key."""
+    s, note = podaac.fetch(code, lat, lon, start, end, _token)
+    return s, ALL[code].get("units") or "", note
 
 
 def gio_token():
@@ -98,6 +113,15 @@ def _fetch(param, lat, lon, start, end, tok):
                 msg += f"\n\nWhat NASA sent back: `{e.raw[:200]}`"
             raise ValueError(msg)
         return s, dict(units=units, note=note)
+    if providers.provider_of(param) == "podaac":
+        if not tok:
+            raise ValueError(f"'{ALL[param]['short_name']}' comes from NASA PO.DAAC, which needs your free "
+                             "Earthdata token. Add it under 'NASA Giovanni' in the sidebar.")
+        try:
+            s, units, note = _podaac_series(param, lat, lon, start, end, tok)
+        except podaac.PodaacError as e:
+            raise ValueError(f"NASA PO.DAAC: {e}")
+        return s, dict(units=units, note=note)
     return _power_series(param, lat, lon, start, end), None
 
 
@@ -106,7 +130,9 @@ def get_many(reqs):
     parallel. Cached series come back instantly; only the missing ones go to NASA."""
     tok = gio_token()
     n_gio = sum(retrieve.is_giovanni(r[0]) for r in reqs)
+    n_pod = sum(providers.provider_of(r[0]) == "podaac" for r in reqs)
     label = (f"Fetching {len(reqs)} series from NASA at once…" if len(reqs) > 1 else
+             "Asking NASA PO.DAAC (one small request per month, about a minute)…" if n_pod else
              "Asking NASA Giovanni (long hourly records come in several pieces)…" if n_gio else "Fetching NASA data…")
     with st.spinner(label):
         out = run_parallel([partial(_fetch, *r, tok) for r in reqs])
@@ -140,7 +166,7 @@ def usable_codes(curated_first=True):
     """Variables offered in the menus: the featured POWER ones, plus all Giovanni ones once a token is in."""
     codes = list(VARIABLES)
     if gio_token():
-        codes += sorted((k for k in ALL if retrieve.is_giovanni(k)), key=lambda k: ALL[k]["name"])
+        codes += sorted((k for k in ALL if retrieve.is_external(k)), key=lambda k: ALL[k]["name"])
     return codes
 
 
@@ -308,50 +334,62 @@ def neighbor_check(p, own_slope, series=None):
 MAX_FORECASTS_PER_SESSION = 5
 
 
+@st.cache_data(show_spinner=False, max_entries=100)
+def _lstm_forecast(values, start, horizon, epochs):
+    """Cached by the series itself, so reruns, Back and repeat clicks are instant."""
+    return forecast_lstm.run(dict(values=list(values), start=start, horizon=horizon, epochs=epochs, members=3))
+
+
 def render_forecast(series, var, p):
-    """Optional LSTM forecast. Code computes the comparison and verdict; the AI is not involved."""
-    mode = forecast_client.backend()
+    """LSTM forecast, trained here in NumPy (forecast_lstm.py). Code computes everything; the AI is not involved."""
     key = "fc_" + "|".join(str(p.get(k)) for k in ("variable", "place", "start_year", "end_year"))
     with st.expander("🔮 Forecast with an LSTM (experimental)"):
-        if mode is None:
-            st.caption("Not enabled on this server (needs the forecast service or PyTorch).")
-            return
-        st.caption("Trains a small LSTM on the first ~80% of the series, tests it on the last ~20% against two "
-                   "simple baselines, then refits on everything and projects forward. Check the held-out errors "
-                   "before trusting the projection.")
+        st.caption("The straight line handles the trend and the seasons; a small LSTM, trained right now on this "
+                   "series, learns what the line misses. Both are tested by forecasting 2 years from 4 earlier "
+                   "dates and comparing with what actually happened. Check those tests before trusting a projection.")
         c1, c2 = st.columns(2)
         horizon = c1.slider("Months ahead", 12, 120, 60, 12, key=key + "_h")
-        epochs = c2.slider("Training epochs", 50, 300, 150, 50, key=key + "_e")
+        epochs = c2.slider("Training epochs (most runs stop early)", 40, 300, 120, 20, key=key + "_e")
         used = st.session_state.get("fc_used", 0)
         clicked = st.button("Train and forecast", key=key + "_b", disabled=used >= MAX_FORECASTS_PER_SESSION)
         if clicked and used < MAX_FORECASTS_PER_SESSION:
             st.session_state["fc_used"] = used + 1
+            s = series.dropna()
             try:
-                with st.spinner("Training the LSTM (about 10-30 seconds)…"):
-                    st.session_state[key] = forecast_client.forecast(series, horizon, epochs)
-            except forecast_client.Unavailable as e:
+                with st.spinner("Training LSTMs and testing them on past years (a few seconds)…"):
+                    st.session_state[key] = _lstm_forecast(tuple(float(v) for v in s.values),
+                                                           str(s.index[0].to_period("M")), horizon, epochs)
+            except ValueError as e:  # gaps, too short, too long
                 st.session_state.pop(key, None)
                 st.warning(str(e))
         if used >= MAX_FORECASTS_PER_SESSION:
             st.caption("Forecast limit for this session reached. Reload the page to reset.")
         res = st.session_state.get(key)
-        if res:
-            rows = [{"Model": m, "Test RMSE": round(v["rmse"], 3), "Test MAE": round(v["mae"], 3)}
-                    for m, v in res["scores"].items()]
-            st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch",
-                         column_config=glossary.column_config(**{"Test RMSE": "rmse", "Test MAE": "mae"}))
-            st.info(res["verdict"])
-            fig = forecast_client.figure(series, res, f"{var['name']}, {p['place']}", var["units"])
-            st.pyplot(fig)
-            plt.close(fig)
-            st.caption(f"Test window: last {res['n_test']} months. Lower error is better. "
-                       "A forecast extends past patterns; it does not explain them.")
+        if not res:
+            return
+        n_short = res["short_months"]
+        rows = [{"Model": m, "Error, next 2 years": round(v["rmse"], 3),
+                 f"Error, next {n_short} months": round(v["rmse_short"], 3),
+                 "Skill vs repeating last year": f"{v['skill']:+.0%}"} for m, v in res["scores"].items()]
+        st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch",
+                     column_config=glossary.column_config(**{"Error, next 2 years": "rmse",
+                                                             f"Error, next {n_short} months": "rmse",
+                                                             "Skill vs repeating last year": "skill"}))
+        st.info(res["verdict"])
+        st.caption(f"Line + LSTM beat the line alone in {res['wins']} of {res['n_folds']} backtests over two years, "
+                   f"and in {res['wins_short']} of {res['n_folds']} over the first {n_short} months. "
+                   f"Errors are typical misses (RMSE) in {var['units']}.")
+        fig = forecast_lstm.figure(series, res, f"{var['name']}, {p['place']}", var["units"])
+        st.pyplot(fig)
+        plt.close(fig)
+        st.caption("A forecast extends past patterns; it does not explain them, and it knows nothing about future "
+                   f"emissions or policy. Trained in {res['seconds']} s with NumPy (no PyTorch).")
 
 
 def investigate(p, question=None, series=None, var=None):
     """p = validated params. `series`/`var` are passed for Giovanni CSV case files."""
     want_nb = (series is None and st.session_state.get("do_neighbors")
-               and not retrieve.is_giovanni(p["variable"]))  # Giovanni: each point costs the user's quota
+               and not retrieve.is_external(p["variable"]))  # Giovanni/PO.DAAC: each point costs quota or time
     nb_series = None
     if series is None:  # the point itself and (optionally) its 4 neighbours, all fetched at the same time
         reqs = [(p["variable"], p["lat"], p["lon"], p["start_year"], p["end_year"])]
@@ -400,6 +438,12 @@ def investigate(p, question=None, series=None, var=None):
         gm = (st.session_state.get("gio_meta") or {}).get(p["variable"], {})
         st.caption(f"Live from NASA Giovanni (`{p['variable'][len(giovanni_catalog.PREFIX):]}`) with your Earthdata "
                    f"token. {gm.get('note', '')} Data: NASA GES DISC; credit NASA when you share results.")
+    elif providers.provider_of(p["variable"]) == "podaac":
+        gm = (st.session_state.get("gio_meta") or {}).get(p["variable"], {})
+        st.caption(f"Live from NASA PO.DAAC with your Earthdata token. {gm.get('note', '')} "
+                   + {"POD:SST": "Sea surface temperature is NOAA's ERSST v5, distributed by PO.DAAC. ",
+                      "POD:SSH": "One satellite map per month (nearest the 15th), not a monthly mean. "}.get(p["variable"], "")
+                   + "Credit NASA PO.DAAC when you share results.")
     st.markdown("#### What the detective found")
     st.markdown(text)
     st.caption(("Wording by AI from the computed numbers. " if used_ai else "") +
@@ -419,6 +463,8 @@ def investigate(p, question=None, series=None, var=None):
                          on_click=_push_followup, args=(case,), width="stretch")
             st.caption(("Suggested by AI. " if clue_ai else "") +
                        "These are hypotheses to check, not explanations. Same place, months and years.")
+    if series is None:  # live data only: case-file CSVs have no real place to look at
+        space_view.render(p, p["variable"], var["name"])
     with st.expander("Case file: exact numbers and data"):
         st.json(m)
         st.download_button("Download series (CSV)", res["series"].to_csv(), "series.csv")
@@ -558,7 +604,8 @@ with st.sidebar:
                     on_change=_clear_followup)
     with st.expander("🛰️ NASA Giovanni: " + ("connected" if gio_token() else "add your login"),
                      expanded=False):
-        st.caption("Adds satellite and model variables (dust, ozone, snow, soil moisture, pollution…) to every mode, "
+        st.caption("Adds satellite, model and ocean variables (dust, ozone, snow, soil moisture, pollution, sea "
+                   "temperature, sea level…) to every mode, "
                    "fetched live with **your own** free Earthdata token. Kept in this browser session only: never "
                    "saved or logged, and sent only to NASA.")
         st.markdown(f"[Get a token]({giovanni_live.TOKEN_URL}) → *Generate Token*, copy, paste here.")
@@ -583,8 +630,13 @@ with st.sidebar:
         st.checkbox("Log each case to MLflow", key="do_mlflow")
     st.divider()
     st.caption("AI: " + ("connected ✅" if nl.llm_available() else "no API key, using keyword matching + template text"))
-    st.caption(f"Catalog: {sum(1 for k in ALL if not retrieve.is_giovanni(k))} NASA POWER variables"
-               + (f" + {sum(1 for k in ALL if retrieve.is_giovanni(k))} Giovanni" if gio_token() else ""))
+    st.caption({"ready": "Search: keywords + meaning (embeddings)",
+                "loading": "Search: keywords only while the meaning model loads",
+                "failed": "Search: keywords only (meaning model unavailable; retrying)",
+                "off": "Search: keywords only"}[retrieve.model_status()])
+    st.caption(f"Catalog: {sum(1 for k in ALL if not retrieve.is_external(k))} NASA POWER variables"
+               + (f" + {sum(1 for k in ALL if retrieve.is_giovanni(k))} Giovanni" if gio_token() else "")
+               + (f" + {sum(1 for k in ALL if providers.provider_of(k) == 'podaac')} PO.DAAC ocean" if gio_token() else ""))
     st.caption("Places: any city over 15,000 people, country or US state, no AI needed" if geo.AVAILABLE else
                "Places: 14 presets only without an AI key. Run `uv sync` to add the offline city list.")
     with st.expander("📖 Glossary: what the numbers mean"):
@@ -734,14 +786,14 @@ try:
         text = c1.text_input("Search in plain words", key="ex_q", placeholder="cloudy, frost, wind, soil…")
         group = c2.selectbox("Group", ["All", "Featured"] + [g for g, _ in explorer.GROUPS] + ["Other"], key="ex_group")
         d1, d2 = st.columns([2, 3])
-        src = d1.selectbox("Source", ["All sources", "NASA POWER", "NASA Giovanni"], key="ex_src")
+        src = d1.selectbox("Source", ["All sources", "NASA POWER", "NASA Giovanni", "NASA PO.DAAC"], key="ex_src")
         hourly = d2.checkbox("Include hour-by-hour POWER variants (about 1,100 near-duplicates)", key="ex_hourly")
         ranked = [c for c, _ in search(text, k=60, giovanni=True)] if text else None
         view = explorer.filter_table(df, group=group, text=text, show_hourly=hourly, ranked_codes=ranked or None,
                                      source=None if src == "All sources" else src)
-        if src != "NASA POWER" and not gio_token():
-            st.info("Giovanni variables can be browsed here; to investigate one, add your Earthdata token under "
-                    "'NASA Giovanni' in the sidebar.")
+        if src not in ("NASA POWER",) and not gio_token():
+            st.info("Giovanni and PO.DAAC variables can be browsed here; to investigate one, add your Earthdata "
+                    "token under 'NASA Giovanni' in the sidebar.")
         st.caption(f"{len(view)} variable{'s' if len(view) != 1 else ''}" + (" · best matches first" if ranked else " · featured first"))
         st.dataframe(view[["Variable", "Source", "Units", "Group", "Definition", "Code"]], hide_index=True,
                      width="stretch", height=320)
@@ -755,6 +807,9 @@ try:
                 st.caption(f"From NASA Giovanni · {v.get('step') or 'native'} data, averaged to months · "
                            f"available from about {v.get('first_year') or '?'}" +
                            ("" if v.get("verified") else " · ID not yet confirmed by NASA's list"))
+            elif providers.provider_of(code) == "podaac":
+                st.caption("From NASA PO.DAAC · ocean only, averaged to months · "
+                           f"available from about {v.get('first_year') or '?'} · needs your Earthdata token")
             elif code not in VARIABLES:
                 st.caption("From the full NASA POWER catalog: not every variable has monthly data at every place.")
             a, b, c = st.columns(3)
@@ -763,7 +818,7 @@ try:
             if pick:
                 case = {**nl.validate(dict(variable=code, place=pick[0], lat=pick[1], lon=pick[2], season=season)),
                         "came_from": "the variable explorer", "origin": "explorer", "question": None}
-                needs_tok = retrieve.is_giovanni(code) and not gio_token()
+                needs_tok = providers.needs_token(code) and not gio_token()
                 c.button("Investigate this here", type="primary", on_click=_push_followup, args=(case,),
                          width="stretch", disabled=needs_tok)
                 if needs_tok:
@@ -783,6 +838,8 @@ try:
                 "- **NASA Giovanni** (GES DISC): live point time series from models and satellites such as "
                 "**GLDAS** (land), **MERRA-2** (aerosols, ozone), **GPM** (rain) and **OMI** (NO₂), using your own "
                 "Earthdata token; plus area-average case files.\n"
+                "- **NASA PO.DAAC**: sea surface temperature (NOAA ERSST v5) and sea level (NASA-SSH altimetry), ocean "
+                "only, read live with your Earthdata token.\n"
                 f"- {geo.ATTRIBUTION}. A country or state is represented by its largest city.")
 
     else:
