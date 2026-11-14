@@ -5,7 +5,7 @@ Ask a plain-language question about environmental change ("Is Svalbard getting w
 Built for the NASA Space Apps Challenge, *Be an Earth Trend Detective*.
 
 ## How it works
-1. **Understand the question.** Retrieval over NASA POWER's parameter list plus an offline place index; an LLM (optional) picks among the retrieved candidates.
+1. **Understand the question.** Retrieval over NASA POWER's parameter list plus an offline place index; an LLM (optional) picks among the retrieved candidates. Without an LLM, hybrid keyword + embedding search (with a hand-written phrase lexicon in `lexicon.py`) picks the variable, and a question that names two variables ("hotter and drier in Texas") is tested as a comparison of the two. Check retrieval quality with `python eval_retrieval.py`; after editing `lexicon.py` or the catalog run `python retrieve.py --build-embeddings`.
 2. **Get the data.** Monthly NASA POWER data for the place (live), or a NASA Giovanni time-series CSV (case files).
 3. **Test the trend in code.** Seasonal cycle removed; OLS slope per decade with 95% CI and p-value; Mann-Kendall and Sen's slope; lag-1 autocorrelation caveat. A trend is called significant only when both tests agree.
 4. **Explain.** The AI only writes the explanation from numbers the code computed. Without a key, template text is used.

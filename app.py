@@ -157,6 +157,11 @@ def ai_parse(q, ai_on, gio_on=False):
 
 
 @st.cache_data(show_spinner=False)
+def question_pair(q, gio_on=False):
+    return nl.find_pair(q)
+
+
+@st.cache_data(show_spinner=False)
 def _explain_cached(ctx_json, ai_on):
     out = nl.explain(json.loads(ctx_json))
     if ai_on and not out[1]:  # AI was expected but failed: show the fallback, don't cache it
@@ -610,7 +615,19 @@ try:
             if c.button(dq, width="stretch"):
                 st.session_state["q"] = dq
         q = st.text_input("Your question", key="q", placeholder="Is Phoenix getting hotter in summer?")
-        if q:
+        pair = question_pair(q, bool(gio_token())) if q else None
+        one_only = bool(pair) and st.checkbox("Investigate just one variable instead", key=f"ask_one_{q}")
+        if pair and not one_only:  # "hotter and drier": test the two variables against each other
+            st.info("Your question names more than one variable, so they are tested against each other. "
+                    "Tick the box above to investigate just one.")
+            st.caption(f"Understood as: **{ALL[pair['a']['variable']]['name']}** at **{pair['a']['place']}** "
+                       f"and **{ALL[pair['b']['variable']]['name']}** at **{pair['b']['place']}** · "
+                       f"{SEASON_LABELS[pair['season']]} · {pair['start_year']}–{pair['end_year']} · keyword match")
+            render_compare({**pair, "question": q}, question=q)
+            if pair.get("others"):
+                st.caption("Your question names more variables than a comparison can hold (two), so "
+                           + ", ".join(ALL[v]["name"] for v in pair["others"]) + " was left out. Ask about it separately.")
+        elif q:
             p0, used_ai = ai_parse(q, nl.llm_available(), bool(gio_token()))
             p = dict(p0)
             ov = st.session_state.get("ask_override")

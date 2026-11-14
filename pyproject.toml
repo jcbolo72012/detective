@@ -13,6 +13,7 @@ dependencies = [
     "requests",
     "anthropic",
     "geonamescache",   # offline city/country lookup (GeoNames data, CC BY 4.0)
+    "fastembed>=0.9.1",
 ]
 
 [project.optional-dependencies]

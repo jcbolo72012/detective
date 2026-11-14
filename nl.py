@@ -10,7 +10,7 @@ import geo
 from catalog import PLACES, RELATED
 from catalog import VARIABLES as CURATED
 from power import LAST_FULL_YEAR
-from retrieve import ALL as VARIABLES, search
+from retrieve import ALL as VARIABLES, search_question
 
 
 
@@ -32,6 +32,12 @@ def _load_env(path=os.path.join(os.path.dirname(os.path.abspath(__file__)), ".en
 _load_env()
 
 SEASON_WORDS = {"summer": "JJA", "winter": "DJF", "spring": "MAM", "fall": "SON", "autumn": "SON"}
+SEASON_RE = re.compile(r"\b(" + "|".join(SEASON_WORDS) + r")s?\b")  # whole words only: "rainfall" is not "fall"
+
+
+def season_in(ql):
+    m = SEASON_RE.search(ql)
+    return SEASON_WORDS[m.group(1)] if m else None
 FLIP = {"JJA": "DJF", "DJF": "JJA", "MAM": "SON", "SON": "MAM"}
 
 
@@ -82,7 +88,7 @@ def _giovanni_hint(q):
     if not q:
         return None
     try:
-        hits = search(q, k=1, giovanni=True)
+        hits = search_question(q, k=1, giovanni=True)
     except TypeError:
         return None
     if hits and str(hits[0][0]).startswith("GIO:"):
@@ -125,14 +131,14 @@ def validate(p, question=None):
 def parse_keywords(q):
     """No-AI fallback: keyword scoring against the catalog."""
     ql = q.lower()
-    hits = search(q, k=5)
+    hits = search_question(q, k=5)
     var = hits[0][0] if hits else None
     found = geo.find_places(q)
     if not found:
         raise ValueError(no_place_message())
     pl = found[0]
     place, lat, lon = pl["label"], pl["lat"], pl["lon"]
-    season = next((c for w, c in SEASON_WORDS.items() if w in ql), None)
+    season = season_in(ql)
     if season and lat < 0:
         season = FLIP[season]
     yrs = [int(y) for y in re.findall(r"\b(19[89]\d|20[0-2]\d)\b", ql)]
@@ -154,7 +160,7 @@ def parse_question(q):
     """Returns (params, used_ai)."""
     if not llm_available():
         return parse_keywords(q), False
-    hits = search(q, k=6)
+    hits = search_question(q, k=6)
     if not hits:
         raise ValueError("Nothing in the data catalog matches that question. Try different words.")
     cat = "\n".join(f'- {k}: {VARIABLES[k]["name"]} [{VARIABLES[k]["units"]}] ({VARIABLES[k]["definition"][:200]})'
@@ -278,15 +284,61 @@ def _pair(a, b, season, start, end, hits):
     return dict(a=pa, b=pb, season=pa["season"], start_year=pa["start_year"], end_year=pa["end_year"], candidates=hits)
 
 
-def parse_compare_keywords(q):
+# Words that join or relate two things being asked about: "hotter AND drier", "sunshine MEAN higher temperatures".
+CLAUSE_SPLIT = re.compile(r"\s*(?:[,;&]|\b(?:and|plus|but|while|whereas|as|with|or|versus|vs\.?|means?|causes?|"
+                          r"affects?|drives?|leads? to|linked to|related to|correlates? with)\b)\s*", re.I)
+
+
+def question_variables(q, max_vars=3):
+    """Variables a question asks about, in order: [(variable id, place dict or None), ...].
+    The question is cut at joining words and each piece is searched on its own, so "hotter and drier" gives
+    air temperature and precipitation. Pieces with no variable (just a place or year) are skipped, and a variable
+    that repeats ("hotter or colder") counts once."""
+    seen, out = set(), []
+    for clause in CLAUSE_SPLIT.split(q or ""):
+        hits = search_question(clause, k=1) if clause.strip() else []
+        if not hits or hits[0][0] in seen:
+            continue
+        seen.add(hits[0][0])
+        found = geo.find_places(clause, max_alts=0)
+        out.append((hits[0][0], found[0] if found else None))
+    return out[:max_vars]
+
+
+def find_pair(q):
+    """A comparison case for a question that names two or more variables, else None. The first two variables
+    are compared at the place named next to them (or the question's first place)."""
+    vs = question_variables(q)
+    if len(vs) < 2:
+        return None
+    places = geo.find_places(q)
+    if not places:
+        raise ValueError(no_place_message())
+    pa = vs[0][1] or vs[1][1] or places[0]
+    pb = vs[1][1] or pa
     ql = q.lower()
-    hits = search(q, k=6)
+    season = season_in(ql)
+    if season and pa["lat"] < 0:
+        season = FLIP[season]
+    yrs = [int(y) for y in re.findall(r"\b(19[89]\d|20[0-2]\d)\b", ql)]
+    mk = lambda v, m: dict(variable=v, place=m["label"], lat=m["lat"], lon=m["lon"])
+    out = _pair(mk(vs[0][0], pa), mk(vs[1][0], pb), season, min(yrs) if yrs else None,
+                max(yrs) if len(yrs) > 1 else None, search_question(q, k=6))
+    return {**out, "others": [v for v, _ in vs[2:]]}
+
+
+def parse_compare_keywords(q):
+    pair = find_pair(q)
+    if pair:
+        return pair
+    ql = q.lower()
+    hits = search_question(q, k=6)
     places = geo.find_places(q)
     if not hits:
         raise ValueError("I couldn't match that to a variable in the catalog. Try the menus below.")
     if len(places) < 2:
         raise ValueError(no_place_message(2))
-    season = next((c for w, c in SEASON_WORDS.items() if w in ql), None)
+    season = season_in(ql)
     if season and places[0]["lat"] < 0:
         season = FLIP[season]
     yrs = [int(y) for y in re.findall(r"\b(19[89]\d|20[0-2]\d)\b", ql)]
@@ -299,7 +351,7 @@ def parse_compare(q):
     """Comparison question -> ({a, b, season, start_year, end_year, candidates}, used_ai)."""
     if not llm_available():
         return parse_compare_keywords(q), False
-    hits = search(q, k=8)
+    hits = search_question(q, k=8)
     if not hits:
         raise ValueError("Nothing in the data catalog matches that question. Try different words.")
     cat = "\n".join(f'- {k}: {VARIABLES[k]["name"]} [{VARIABLES[k]["units"]}] ({VARIABLES[k]["definition"][:160]})'

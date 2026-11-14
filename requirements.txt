@@ -7,4 +7,5 @@ matplotlib
 requests
 anthropic
 geonamescache
+fastembed
 # Optional, not needed for the hosted app: mlflow, torch (LSTM runs in the cloud function, see lstm_service/)
