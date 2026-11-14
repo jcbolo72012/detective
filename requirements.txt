@@ -1,0 +1,11 @@
+streamlit
+pandas
+numpy
+scipy
+matplotlib
+requests
+# optional:
+# anthropic
+# openai
+# mlflow
+# torch

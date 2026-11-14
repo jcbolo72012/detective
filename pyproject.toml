@@ -1,0 +1,23 @@
+[project]
+name = "earth-trend-detective"
+version = "0.1.0"
+description = "Ask what is changing on Earth, where, and whether the trend is statistically significant. NASA Space Apps Challenge."
+requires-python = ">=3.10"
+dependencies = [
+    "streamlit>=1.32",
+    "pandas",
+    "numpy",
+    "scipy",
+    "scikit-learn",
+    "matplotlib",
+    "requests",
+    "anthropic",
+]
+
+[project.optional-dependencies]
+openai = ["openai"]      # only if you use an OpenAI key instead of Anthropic
+tracking = ["mlflow"]    # MLflow case-file logging
+lstm = ["torch"]         # LSTM forecast in trend_detective.py (large download)
+
+[tool.uv]
+package = false          # an app, not an installable library
