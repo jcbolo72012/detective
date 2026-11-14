@@ -1,4 +1,4 @@
-# Earth Trend Detective
+# PLaNETS: Plain-Language NASA Earth Trend Sleuth
 
 Ask a plain-language question about environmental change ("Is Svalbard getting warmer?", "Is Oslo warming faster than Cairo in winter?") and get a statistically tested answer with a plain-language explanation.
 

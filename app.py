@@ -1,4 +1,4 @@
-"""Earth Trend Detective - interactive app.
+"""PLaNETS (Plain-Language NASA Earth Trend Sleuth) - interactive app.
 Run:   pip install streamlit pandas numpy scipy matplotlib requests   (+ anthropic or openai, + mlflow: optional)
        streamlit run app.py
 Flow:  question -> [AI or keywords] parameters -> NASA POWER / Giovanni CSV -> analyze() in code -> [AI or template] explanation
@@ -39,7 +39,7 @@ try:
 except ImportError:
     HAS_MLFLOW = False
 
-st.set_page_config(page_title="Earth Trend Detective", page_icon="🔎", layout="wide")
+st.set_page_config(page_title="PLaNETS: Plain-Language NASA Earth Trend Sleuth", page_icon="🔎", layout="wide")
 SEASON_LABELS = {None: "All months (seasonal cycle removed)", "DJF": "Dec–Feb", "MAM": "Mar–May",
                  "JJA": "Jun–Aug", "SON": "Sep–Nov"}
 
@@ -543,8 +543,9 @@ def render_compare(case, question=None):
 
 
 # ------------------------------------------------------------------ UI
-st.title("🔎 Earth Trend Detective")
-st.caption("Ask what is changing, where. NASA data answers; statistics say whether it's real.")
+st.title("🔎 PLaNETS")
+st.caption("**Pl**ain-**La**nguage **N**ASA **E**arth **T**rend **S**leuth: ask what is changing, where. "
+           "NASA data answers; statistics say whether it's real.")
 
 with st.sidebar:
     mode = st.radio("How do you want to investigate?", ["Ask a question", "Compare two trends", "Pick from menus", "Case files (Giovanni CSV)",
@@ -759,7 +760,8 @@ try:
                    "'Case files (Giovanni CSV)' mode, where you can also get more.")
         with st.expander("Where the data comes from"):
             st.markdown(
-                "- **NASA POWER**: weather variables come from **MERRA-2**, NASA's reconstruction of global weather "
+                "- **[NASA POWER](https://power.larc.nasa.gov)** (Prediction Of Worldwide Energy Resources): weather "
+                "variables come from **MERRA-2**, NASA's reconstruction of global weather "
                 "since 1980; sunlight and cloud variables come from the **CERES** satellite instruments.\n"
                 "- **NASA Giovanni** (GES DISC): live point time series from models and satellites such as "
                 "**GLDAS** (land), **MERRA-2** (aerosols, ozone), **GPM** (rain) and **OMI** (NO₂), using your own "
