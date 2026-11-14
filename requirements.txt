@@ -1,11 +1,10 @@
-streamlit
+streamlit>=1.50
 pandas
 numpy
 scipy
+scikit-learn
 matplotlib
 requests
-# optional:
-# anthropic
-# openai
-# mlflow
-# torch
+anthropic
+geonamescache
+# Optional, not needed for the hosted app: mlflow, torch (LSTM runs in the cloud function, see lstm_service/)

@@ -29,6 +29,26 @@ VARIABLES = {
                               keywords=["sun", "sunlight", "sunny", "solar", "cloudy", "cloudier", "dimming", "brightening"]),
 }
 
+# Follow-up variables worth checking next (used when no AI key is set). Reasons are hypotheses, not causes.
+RELATED = {
+    "T2M": [("PRECTOTCORR", "to see whether rainfall is changing alongside temperature at this place."),
+            ("T2M_MIN", "to see whether nights are changing faster or slower than the daily average.")],
+    "T2M_MAX": [("T2M_MIN", "to see whether nights are changing as much as the daytime highs."),
+                ("GWETROOT", "to see whether the soil is drying, since dry ground often goes with hotter days.")],
+    "T2M_MIN": [("RH2M", "to see whether humidity is changing, since moist air tends to keep nights warmer."),
+                ("T2M_MAX", "to see whether daytime highs are changing as much as the nights.")],
+    "PRECTOTCORR": [("GWETROOT", "to see whether the change in rain shows up in the soil where plants grow."),
+                    ("T2M", "to see whether temperature is changing too, which affects how fast water evaporates.")],
+    "GWETROOT": [("PRECTOTCORR", "to see whether rainfall is changing in the same direction as the soil."),
+                 ("T2M", "to see whether it is getting warmer, which can dry soil even when rain holds steady.")],
+    "RH2M": [("T2M", "to see whether temperature is changing, since warmer air can hold more water vapour."),
+             ("PRECTOTCORR", "to see whether rainfall is changing along with the humidity.")],
+    "WS2M": [("T2M", "to see whether temperature is changing at the same time as the wind."),
+             ("ALLSKY_SFC_SW_DWN", "to see whether sunlight at the surface is changing, a sign of shifting weather patterns.")],
+    "ALLSKY_SFC_SW_DWN": [("PRECTOTCORR", "to see whether rainfall is changing, since cloudier skies usually bring both."),
+                          ("T2M", "to see whether temperature is following the change in sunlight.")],
+}
+
 PLACES = {  # name: (lat, lon)
     "Phoenix, USA": (33.45, -112.07), "New York, USA": (40.71, -74.01), "Miami, USA": (25.76, -80.19),
     "Fairbanks, Alaska": (64.84, -147.72), "Central Valley, California": (36.6, -119.9),

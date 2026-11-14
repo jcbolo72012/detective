@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Ask what is changing on Earth, where, and whether the trend is statistically significant. NASA Space Apps Challenge."
 requires-python = ">=3.10"
 dependencies = [
-    "streamlit>=1.32",
+    "streamlit>=1.50",
     "pandas",
     "numpy",
     "scipy",
@@ -12,6 +12,7 @@ dependencies = [
     "matplotlib",
     "requests",
     "anthropic",
+    "geonamescache",   # offline city/country lookup (GeoNames data, CC BY 4.0)
 ]
 
 [project.optional-dependencies]

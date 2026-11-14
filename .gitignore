@@ -4,3 +4,7 @@ outputs/
 mlruns/
 mlflow.db
 .env
+.streamlit/secrets.toml
+_backup_*/
+apply_next_clue.py
+.DS_Store
