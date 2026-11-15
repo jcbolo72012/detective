@@ -1,4 +1,4 @@
-"""The Planeteer: the PLaNETS app (Plain-Language NASA Earth Trend Sleuth). The student is the detective;
+"""PLaNETS: Plain-Language NASA Earth Trend Sleuth. The student is the detective;
 the Planeteer is their sidekick that fetches NASA evidence and runs the tests.
 Run:   pip install streamlit pandas numpy scipy matplotlib requests   (+ anthropic or openai, + mlflow: optional)
        streamlit run app.py
@@ -50,7 +50,7 @@ try:
 except ImportError:
     HAS_MLFLOW = False
 
-st.set_page_config(page_title="The Planeteer · PLaNETS", page_icon="🌍", layout="wide")
+st.set_page_config(page_title="PLaNETS: Plain-Language NASA Earth Trend Sleuth", page_icon="🌍", layout="wide")
 look.apply()
 MODE_LABELS = {"Ask a question": "🔎 Ask the Planeteer", "Compare two trends": "⚖️ Compare two suspects",
                "Pick from menus": "🧭 Pick from menus", "Case files (Giovanni CSV)": "🗂️ Case files (Giovanni CSV)",
@@ -651,10 +651,9 @@ def _forget_gio_token():
 
 
 # ------------------------------------------------------------------ UI
-st.title("🌍 The Planeteer")
-st.caption("**You're the detective.** Ask what's changing on Earth, and your sidekick fetches the NASA evidence "
-           "and puts it on trial. Statistics decide what's real. · *PLaNETS: **Pl**ain-**La**nguage **N**ASA "
-           "**E**arth **T**rend **S**leuthing*")
+st.title("🌍 PLaNETS: Plain-Language NASA Earth Trend Sleuth")
+st.caption("**You're the detective.** Ask what's changing on Earth, and your sidekick, the Planeteer, fetches "
+           "the NASA evidence and puts it on trial. Statistics decide what's real.")
 
 if not st.session_state.get("_link_loaded"):  # a shared link: reproduce what it describes
     st.session_state["_link_loaded"] = True
