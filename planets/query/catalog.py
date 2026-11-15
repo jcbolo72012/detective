@@ -60,10 +60,12 @@ PLACES = {  # name: (lat, lon)
     "Svalbard, Arctic": (78.22, 15.65), "Murray-Darling Basin, Australia": (-33.5, 146.0),
 }
 
+# Landing-page examples: NASA POWER only (no token needed) and checked against the data, so each gives a clear,
+# significant answer on the live app. Re-check before changing them.
 DEMO_QUESTIONS = [
     "Is Phoenix getting hotter in summer?",
-    "Is the Sahel getting wetter or drier?",
-    "Are nights getting warmer in Delhi?",
-    "Is soil drying out in California's Central Valley?",
+    "Are nights getting warmer in Boston?",
     "Is Svalbard in the Arctic getting warmer?",
+    "Is the Sahel getting wetter or drier?",
+    "Is Sydney getting warmer?",
 ]

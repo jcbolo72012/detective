@@ -15,6 +15,20 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import streamlit as st
 
+# Streamlit Cloud reruns app.py when a new commit lands but keeps already-imported modules in memory, so app.py and
+# planets/ can end up from different commits (e.g. "analyze() takes 2 positional arguments but 3 were given").
+# Re-import the planets package whenever any of its files changed since it was loaded.
+import sys
+from pathlib import Path
+
+_PLANETS_STAMP = max(f.stat().st_mtime for f in (Path(__file__).resolve().parent / "planets").rglob("*.py"))
+if "planets" in sys.modules and getattr(sys.modules["planets"], "_stamp", None) != _PLANETS_STAMP:
+    for _mod in [m for m in sys.modules if m == "planets" or m.startswith("planets.")]:
+        del sys.modules[_mod]
+import planets  # noqa: E402
+
+planets._stamp = _PLANETS_STAMP
+
 try:  # lets worker threads share this session's Streamlit context (cache, no "missing ScriptRunContext" noise)
     from streamlit.runtime.scriptrunner import add_script_run_ctx, get_script_run_ctx
 except Exception:  # older Streamlit or test stub
@@ -623,9 +637,9 @@ def investigate(p, question=None, series=None, var=None):
             mlflow.log_metrics({k: float(v) for k, v in m.items() if isinstance(v, (int, float, bool))})
 
 
-COMPARE_EXAMPLES = ["Is Svalbard warming faster than London?",
-                    "Is the Sahel getting wetter while Cape Town gets drier?",
-                    "Is Delhi warming faster than Phoenix in summer?"]
+COMPARE_EXAMPLES = ["Is Svalbard warming faster than London?",  # NASA POWER only; checked against the data
+                    "Is Phoenix warming faster than Seattle in summer?",
+                    "Is Boston warming faster than London?"]
 
 
 def _label(p, other):
