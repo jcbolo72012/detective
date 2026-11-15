@@ -15,13 +15,14 @@ What it does, in plain words:
     res = run_series(series, horizon=60)       # series: monthly pandas Series, no gaps
     fig = figure(series, res, "Air temperature, Phoenix", "°C")
 
-Self-test:  python forecast_lstm.py
+Self-test:  python -m planets.forecast.forecast_lstm
 """
 import time
 
 import numpy as np
 
-from lstm_numpy import LSTM
+from planets.forecast.lstm_numpy import LSTM
+from planets.ui import palette
 
 LIMITS = dict(min_points=96, max_points=600, max_horizon=120, max_epochs=300, max_hidden=32, max_members=5,
               max_folds=6)
@@ -211,7 +212,6 @@ def run(payload):
 
 def run_series(series, horizon=60, **settings):
     """run() for a monthly pandas Series (index = dates). Raises ValueError on gaps."""
-    import pandas as pd
     s = series.dropna()
     per = s.index.to_period("M")
     if len(per.unique()) != len(per) or (len(per) and (per[-1] - per[0]).n != len(per) - 1):
@@ -231,28 +231,28 @@ def figure(series, res, title, units, years_shown=15):
     f_idx = pd.period_range(p0 + res["n_points"], periods=res["horizon"], freq="M").to_timestamp()
     clim = s.groupby(s.index.month).mean()                       # normal value for each calendar month
     norm = lambda idx: clim.reindex(idx.month).values
-    colors = {LINE: "#33658a", HYBRID: "#d1495b"}
+    colors = {LINE: palette.OCEAN, HYBRID: palette.AURORA}
     cut = s.index[-1] - pd.DateOffset(years=years_shown)
     shown = s[s.index >= cut]
     fig, axes = plt.subplots(2, 1, figsize=(9.5, 6.2), sharex=True, gridspec_kw={"height_ratios": [1, 1.25]})
     for ax, anomaly in zip(axes, (False, True)):
         sub = (lambda idx, v: np.asarray(v) - norm(idx)) if anomaly else (lambda idx, v: np.asarray(v))
-        ax.plot(shown.index, sub(shown.index, shown.values), color="#444", lw=0.9, label="observed")
-        ax.axvspan(t_idx[0], t_idx[-1], color="#f6d55c", alpha=0.2, label="last backtest")
+        ax.plot(shown.index, sub(shown.index, shown.values), color=palette.INK, lw=0.9, label="observed")
+        ax.axvspan(t_idx[0], t_idx[-1], color=palette.SUN, alpha=0.15, label="last backtest")
         for m in (LINE, HYBRID):
             ax.plot(t_idx, sub(t_idx, lt["pred"][m]), color=colors[m], lw=1.1, ls=":")
             ax.fill_between(f_idx, sub(f_idx, res["bands"][m]["lo"]), sub(f_idx, res["bands"][m]["hi"]),
                             color=colors[m], alpha=0.12, lw=0)
             ax.plot(f_idx, sub(f_idx, res["future"][m]), color=colors[m], lw=1.6, label=m)
         if anomaly:
-            ax.axhline(0, color="#999", lw=0.6)
+            ax.axhline(0, color=palette.GRID, lw=0.6)
         ax.set_ylabel(f"{units} above normal" if anomaly else units, fontsize=9)
         ax.set_title("Seasonal cycle removed: where the LSTM can add something" if anomaly else title,
                      loc="left", fontsize=10 if anomaly else 11)
         ax.spines[["top", "right"]].set_visible(False)
     axes[0].legend(fontsize=7.5, loc="upper left", ncol=4, frameon=False)
     fig.text(0.01, 0.005, "Shaded: 95% bands from past forecast errors. Dotted: forecasts made in the last backtest.",
-             fontsize=7.5, color="#666")
+             fontsize=7.5, color=palette.MUTED)
     fig.tight_layout(rect=(0, 0.02, 1, 1))
     return fig
 

@@ -30,7 +30,7 @@ def strip_prefix(code):
 def external_catalogs():
     """Catalog entries of the sources that are not POWER and not Giovanni (which has its own loader)."""
     try:
-        import podaac
+        from planets.sources import podaac
     except ImportError:  # netCDF4 missing: the ocean variables just don't appear
         return {}
     return podaac.load()

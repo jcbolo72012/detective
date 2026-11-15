@@ -2,7 +2,7 @@
 
 Keys are catalog ids or fnmatch patterns (Giovanni ids start with "GIO:"). Phrases are added to the entry's own
 keywords, for both the TF-IDF and the embedding index, so after editing this file run
-  python retrieve.py --build-embeddings
+  python -m planets.query.retrieve --build-embeddings
 Write words a student would actually type, including slang and the opposite direction ("drier" for rain)."""
 
 LEXICON = {

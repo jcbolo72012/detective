@@ -1,55 +1,19 @@
+"""Trend statistics for one monthly series: everything the app's verdicts come from.
+
+  analyze(series, season=None) -> {series, anom, fit, metrics}
+  - seasonal cycle removed (monthly anomalies), or one value per year for a season (e.g. "JJA")
+  - OLS slope per decade with 95% CI and t-test p; Mann-Kendall test and Sen's slope; lag-1 autocorrelation
+  - significant = both tests p < 0.05
+
+Also: load_giovanni_csv() for Giovanni "Time Series, Area-Averaged" CSV exports.
 """
-Earth Trend Detective - starter template
-NASA Space Apps Challenge
-
-Pipeline:
-  1. Load a Giovanni "Time Series, Area-Averaged" CSV (or synthetic demo data)
-  2. Resample to monthly and remove the seasonal cycle (anomalies)
-  3. Trend + significance: OLS slope with 95% CI and p-value, Mann-Kendall + Sen's slope
-  4. Chronological holdout: linear model (trend + seasonality) vs LSTM
-  5. Refit on all data and project forward
-  6. Log params, metrics and figures to MLflow (if installed)
-
-Usage:
-  python trend_detective.py --demo
-  python trend_detective.py --csv giovanni_export.csv --name "Precip, Sahel" --units "mm/day"
-  python trend_detective.py --csv omi_ozone_antarctica.csv --season SON --name "Antarctic ozone" --units DU
-    (--season: one value per year from those months; also DJF/MAM/JJA, "9,10" or "9-11")
-  mlflow ui      # then open http://127.0.0.1:5000
-
-Install:  pip install pandas numpy scipy scikit-learn matplotlib mlflow torch
-torch and mlflow are optional: the script skips the LSTM / logging if they are missing.
-"""
-import argparse
 import io
-import json
-import os
 
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from scipy import stats
 
-try:
-    import mlflow
-    HAS_MLFLOW = True
-except ImportError:
-    HAS_MLFLOW = False
 
-try:
-    import torch
-    import torch.nn as nn
-    HAS_TORCH = True
-except ImportError:
-    HAS_TORCH = False
-
-OUT = "outputs"
-os.makedirs(OUT, exist_ok=True)
-
-
-# ---------------------------------------------------------------- 1. data
 def load_giovanni_csv(path):
     """Giovanni CSVs start with metadata lines (Title, Bounding Box, Fill Value...).
     The data starts at the line beginning with 'time'."""
@@ -157,204 +121,6 @@ def lag1_autocorr(y):
 
 
 # ---------------------------------------------------------------- 4. models
-def linear_features(idx, t0, seasonal=True):
-    k = ((idx.year - t0.year) * 12 + (idx.month - t0.month)).values.astype(float)
-    if not seasonal:  # annual series: just intercept + trend
-        return np.column_stack([np.ones_like(k), k])
-    m = idx.month.values
-    return np.column_stack([np.ones_like(k), k,
-                            np.sin(2 * np.pi * m / 12), np.cos(2 * np.pi * m / 12),
-                            np.sin(4 * np.pi * m / 12), np.cos(4 * np.pi * m / 12)])
-
-
-def fit_linear(train, seasonal=True):
-    t0 = train.index[0]
-    X = linear_features(train.index, t0, seasonal)
-    beta, *_ = np.linalg.lstsq(X, train.values, rcond=None)
-    return lambda idx: linear_features(idx, t0, seasonal) @ beta
-
-
-if HAS_TORCH:
-    class LSTMNet(nn.Module):
-        def __init__(self, hidden=32):
-            super().__init__()
-            self.lstm = nn.LSTM(1, hidden, batch_first=True)
-            self.head = nn.Linear(hidden, 1)
-
-        def forward(self, x):
-            out, _ = self.lstm(x)
-            return self.head(out[:, -1])
-
-
-def fit_lstm(train, window=24, epochs=300, hidden=32, lr=1e-2, seed=0):
-    """Returns predict(n_steps) that rolls forward recursively from the end of train."""
-    torch.manual_seed(seed)
-    mu, sd = train.mean(), train.std()
-    z = ((train.values - mu) / sd).astype(np.float32)
-    X = np.stack([z[i:i + window] for i in range(len(z) - window)])[..., None]
-    Y = z[window:][:, None]
-    X, Y = torch.tensor(X), torch.tensor(Y)
-    model = LSTMNet(hidden)
-    opt = torch.optim.Adam(model.parameters(), lr=lr)
-    for _ in range(epochs):
-        opt.zero_grad()
-        loss = nn.functional.mse_loss(model(X), Y)
-        loss.backward()
-        opt.step()
-
-    def predict(n_steps):
-        hist = list(z[-window:])
-        preds = []
-        model.eval()
-        with torch.no_grad():
-            for _ in range(n_steps):
-                x = torch.tensor(np.array(hist[-window:], dtype=np.float32)[None, :, None])
-                p = model(x).item()
-                preds.append(p)
-                hist.append(p)
-        return np.array(preds) * sd + mu
-
-    return predict, float(loss.item())
-
-
-def metrics(y, yhat, prefix):
-    err = np.asarray(y) - np.asarray(yhat)
-    return {f"{prefix}_rmse": float(np.sqrt(np.mean(err ** 2))),
-            f"{prefix}_mae": float(np.mean(np.abs(err)))}
-
-
-# ---------------------------------------------------------------- 5. plots
-def plot_trend(s, anom, r, title, units, path, season=None):
-    fig, ax = plt.subplots(2, 1, figsize=(10, 7), sharex=True)
-    mk = "o-" if season else "-"
-    ax[0].plot(s.index, s.values, mk, lw=1, ms=4)
-    ax[0].set_title(f"{title}: " + (f"{season} mean, one value per year" if season else "raw monthly series"))
-    ax[0].set_ylabel(units)
-    x = (anom.index - anom.index[0]).days.values / 365.25
-    lab = "anomaly vs. record mean" if season else "anomaly (seasonal cycle removed)"
-    ax[1].plot(anom.index, anom.values, mk, lw=1, ms=4, color="gray", label=lab)
-    ax[1].plot(anom.index, r.intercept + r.slope * x, color="crimson", lw=2,
-               label=f"trend {r.slope*10:+.3g} {units}/decade (p={r.pvalue:.3g})")
-    ax[1].axhline(0, color="k", lw=0.5)
-    ax[1].set_ylabel(f"anomaly ({units})")
-    ax[1].legend()
-    fig.tight_layout()
-    fig.savefig(path, dpi=120)
-    plt.close(fig)
-
-
-def plot_forecast(s, test_idx, preds, future_idx, future, title, units, path):
-    fig, ax = plt.subplots(figsize=(11, 5))
-    ax.plot(s.index, s.values, color="k", lw=1, label="observed")
-    if test_idx is not None:
-        ax.axvspan(test_idx[0], test_idx[-1], color="gold", alpha=0.2, label="held-out test")
-    for name, p in preds.items():
-        ax.plot(test_idx, p, lw=1.5, label=f"{name} (test)")
-    for name, f in future.items():
-        ax.plot(future_idx, f, lw=1.5, ls="--", label=f"{name} (projection)")
-    ax.set_title(title)
-    ax.set_ylabel(units)
-    ax.legend(fontsize=8)
-    fig.tight_layout()
-    fig.savefig(path, dpi=120)
-    plt.close(fig)
-
-
-# ---------------------------------------------------------------- main
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--csv")
-    ap.add_argument("--demo", action="store_true")
-    ap.add_argument("--name", default="Demo variable")
-    ap.add_argument("--units", default="units")
-    ap.add_argument("--test_months", type=int, default=36)
-    ap.add_argument("--horizon", type=int, default=60)
-    ap.add_argument("--window", type=int, default=24)
-    ap.add_argument("--epochs", type=int, default=300)
-    ap.add_argument("--experiment", default="earth-trend-detective")
-    ap.add_argument("--season", help="Analyse one value per year: SON, DJF, MAM, JJA, '9,10' or '9-11'. "
-                                     "E.g. --season SON for the Antarctic ozone hole.")
-    ap.add_argument("--test_years", type=int, default=5, help="holdout length when --season is used")
-    a = ap.parse_args()
-
-    s = synthetic_series() if a.demo or not a.csv else load_giovanni_csv(a.csv)
-    print(f"{len(s)} monthly points, {s.index[0]:%Y-%m} to {s.index[-1]:%Y-%m}")
-
-    annual = bool(a.season)
-    if annual:
-        months = parse_season(a.season)
-        s = seasonal_annual(s, months)
-        print(f"Season {a.season} (months {months}): {len(s)} years, {s.index[0].year} to {s.index[-1].year}")
-        if len(s) < 10:
-            print("Warning: fewer than 10 years, so significance tests will be weak.")
-        steps_per_year, n_test, horizon = 1, a.test_years, max(1, a.horizon // 12)
-        window = min(a.window, max(2, (len(s) - n_test) // 3))
-        freq = "YS"
-    else:
-        steps_per_year, n_test, horizon, window, freq = 12, a.test_months, a.horizon, a.window, "MS"
-
-    # trend + significance on anomalies
-    anom = s - s.mean() if annual else deseasonalize(s)[0]
-    ols, r = ols_trend(anom)
-    mk = mann_kendall(anom.values)
-    mk["sen_slope_per_decade"] = mk.pop("sen_slope_per_step") * 10 * steps_per_year
-    rho = lag1_autocorr(anom.values - (r.intercept + r.slope * (anom.index - anom.index[0]).days.values / 365.25))
-    trend = {**ols, **mk, "lag1_autocorr_resid": rho}
-    sig = trend["mk_p_value"] < 0.05 and trend["ols_p_value"] < 0.05
-    print(json.dumps(trend, indent=2))
-    print("Verdict:", "SIGNIFICANT trend (p<0.05)" if sig else "no significant trend at p<0.05")
-    if rho > 0.3:
-        print(f"Note: residual lag-1 autocorrelation {rho:.2f}, so p-values are optimistic.")
-
-    # holdout comparison
-    train, test = s.iloc[:-n_test], s.iloc[-n_test:]
-    lname = "linear trend" if annual else "linear+seasonal"
-    preds = {lname: fit_linear(train, not annual)(test.index)}
-    m = metrics(test, preds[lname], "test_linear")
-    if HAS_TORCH:
-        lstm_pred, train_loss = fit_lstm(train, window, a.epochs)
-        preds["LSTM"] = lstm_pred(len(test))
-        m.update(metrics(test, preds["LSTM"], "test_lstm"))
-        m["lstm_train_loss"] = train_loss
-    if annual:  # baseline: persistence (last training year)
-        m.update(metrics(test, np.repeat(train.iloc[-1], len(test)), "test_persistence"))
-    else:       # baseline: repeat last year
-        m.update(metrics(test, np.tile(train.iloc[-12:].values, 1 + len(test) // 12)[:len(test)],
-                         "test_seasonal_naive"))
-    print(json.dumps(m, indent=2))
-
-    # future projection: refit on everything
-    step = pd.offsets.YearBegin() if annual else pd.offsets.MonthBegin()
-    future_idx = pd.date_range(s.index[-1] + step, periods=horizon, freq=freq)
-    future = {lname: fit_linear(s, not annual)(future_idx)}
-    if HAS_TORCH:
-        future["LSTM"] = fit_lstm(s, window, a.epochs)[0](horizon)
-
-    f1 = os.path.join(OUT, "trend.png")
-    f2 = os.path.join(OUT, "holdout_and_projection.png")
-    plot_trend(s, anom, r, a.name, a.units, f1, a.season)
-    plot_forecast(s, test.index, preds, future_idx, future, a.name, a.units, f2)
-    pd.DataFrame(future, index=future_idx).to_csv(os.path.join(OUT, "projection.csv"))
-    print("Saved figures to", OUT)
-
-    if HAS_MLFLOW:
-        mlflow.set_experiment(a.experiment)
-        with mlflow.start_run(run_name=a.name):
-            mlflow.log_params({"variable": a.name, "units": a.units, "source": a.csv or "synthetic",
-                               "season": a.season or "all-months", "n_points": len(s),
-                               "n_test": n_test, "window": window, "epochs": a.epochs,
-                               "horizon_steps": horizon})
-            mlflow.log_metrics({**trend, **m, "significant": int(sig)})
-            for f in (f1, f2, os.path.join(OUT, "projection.csv")):
-                mlflow.log_artifact(f)
-        print("Logged to MLflow. Run `mlflow ui` to view.")
-
-
-if __name__ == "__main__":
-    main()
-
-
-# ---------------------------------------------------------------- reusable entry point (used by app.py)
 def analyze(s, season=None):
     """Monthly pd.Series -> dict with the analysed series, anomalies, fitted line and metrics.
     All numbers the app (and the AI explanation) shows come from here."""

@@ -61,6 +61,11 @@ TERMS = {
     "band": ("Forecast band",
         "The shaded range around a projection, built from how wrong the model actually was in its backtests. "
         "It widens further out because forecasts get less certain the further ahead they reach."),
+    "years_until": ("Years until significant",
+        "How long a record a trend this size needs before it stands out from the natural ups and downs, if it "
+        "keeps going at the rate measured so far. 'Even odds' is the length at which a record would test "
+        "significant about half the time; 4-in-5 needs longer. Already-significant trends show the year they "
+        "first became detectable."),
     "holdout": ("Held-out test",
         "The last part of the record is hidden while the model trains, then used to check its predictions. A model "
         "that only looks good on data it has already seen proves nothing."),

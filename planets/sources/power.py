@@ -1,4 +1,4 @@
-"""NASA POWER monthly point fetcher (no login). Test:  python power.py"""
+"""NASA POWER monthly point fetcher (no login). Test:  python -m planets.sources.power"""
 import datetime as dt
 
 import numpy as np

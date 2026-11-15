@@ -7,7 +7,7 @@ in seconds on a CPU and needs nothing beyond NumPy, so it runs on Streamlit Comm
     net.fit(X, Y, epochs=200)          # X: (batch, time, n_in), Y: (batch, 1)
     yhat = net.predict(X)              # (batch, 1)
 
-Self-test (gradient check against finite differences):  python lstm_numpy.py
+Self-test (gradient check against finite differences):  python -m planets.forecast.lstm_numpy
 """
 import numpy as np
 

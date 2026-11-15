@@ -1,14 +1,16 @@
 """Score variable retrieval against eval/retrieval_cases.json.
 
-  python eval_retrieval.py              # compare TF-IDF, TF-IDF without places, and hybrid (needs catalog_embeddings.npz)
-  python eval_retrieval.py -v           # also list every miss
-  python eval_retrieval.py --only multi # one tag
+  python eval/eval_retrieval.py              # compare TF-IDF, TF-IDF without places, and hybrid (needs catalog_embeddings.npz)
+  python eval/eval_retrieval.py -v           # also list every miss
+  python eval/eval_retrieval.py --only multi # one tag
 
 Each case lists groups of acceptable catalog ids (fnmatch patterns allowed). One group = one variable the
 question asks about, so a two-variable question has two groups.
   top1   the best hit is acceptable for some group
   cov@3  every group has an acceptable id in the top 3     (cov@5: top 5)
 Cases tagged "none" have no right answer: they pass when nothing is returned."""
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 import argparse
 import collections
 import fnmatch
@@ -16,11 +18,11 @@ import json
 import os
 import sys
 
-import retrieve
+from planets.query import retrieve
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-CASES = os.path.join(HERE, "eval", "retrieval_cases.json")
-HELDOUT = os.path.join(HERE, "eval", "retrieval_cases_heldout.json")
+CASES = os.path.join(HERE, "retrieval_cases.json")
+HELDOUT = os.path.join(HERE, "retrieval_cases_heldout.json")
 
 
 def _ok(hit, group):
@@ -38,7 +40,7 @@ def score(case, search):
 
 def split_check(cases):
     """Does nl.question_variables find one variable per group? Single-variable questions must not be split."""
-    import nl
+    from planets.query import nl
     multi, single, rows = [], [], []
     for c in cases:
         retrieve.GIOVANNI_ON.set(bool(c.get("gio")))
@@ -76,7 +78,7 @@ def main():
                ("tfidf-np", lambda q, **kw: retrieve.search_question(q, hybrid=False, **kw)),
                ("hybrid", lambda q, **kw: retrieve.search_question(q, hybrid=True, **kw))]
     if retrieve._EMB is None:
-        sys.exit("No catalog_embeddings.npz for this catalog: run  python retrieve.py --build-embeddings")
+        sys.exit("No catalog_embeddings.npz for this catalog: run  python -m planets.query.retrieve --build-embeddings")
     res = {name: [score(c, fn) for c in cases] for name, fn in engines}
 
     def table(title, pick):

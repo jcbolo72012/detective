@@ -2,12 +2,12 @@
 
 Reads the CSV's own header (title, units, region), then matches the variable against KNOWN for a
 plain-language name and definition. Unknown variables still work: they use the header's own wording."""
+from planets import config
 import glob
 import os
 import re
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(HERE, "data")
+DATA_DIR = config.DATA_DIR
 
 # (pattern matched against the CSV's column name + title, description). First match wins.
 KNOWN = [

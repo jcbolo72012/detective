@@ -8,8 +8,7 @@ grid cell asked for, so nothing large is downloaded. Granules are found with NAS
            every 5 days; one map per month (nearest the 15th) is used, so it is a monthly sample, not a monthly mean.
 
 Both are ocean-only: a point on land uses the nearest open-ocean cell within a few cells, and says so.
-Test (needs EARTHDATA_TOKEN in .env):  python podaac.py"""
-import datetime as dt
+Test (needs EARTHDATA_TOKEN in .env):  python -m planets.sources.podaac"""
 import math
 import re
 import threading
@@ -211,9 +210,8 @@ def fetch(code, lat, lon, start_year, end_year, token, step=None):
 
 
 if __name__ == "__main__":
-    import os
-    tok = next((l.split("=", 1)[1] for l in open(os.path.join(os.path.dirname(__file__), ".env"), encoding="utf-8-sig")
-                if l.strip().startswith("EARTHDATA_TOKEN=")), "")
+    from planets import config
+    tok = config.env("EARTHDATA_TOKEN")
     for code, lat, lon in (("POD:SST", 21.3, -157.8), ("POD:SSH", 21.3, -157.8), ("POD:SST", 25.76, -80.19)):
         t = time.time()
         s, note = fetch(code, lat, lon, 2015, 2024, tok)

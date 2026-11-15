@@ -1,11 +1,13 @@
-"""Tests for lstm_numpy.py and forecast_lstm.py. Run:  python test_forecast_lstm.py   (or pytest)"""
+"""Tests for lstm_numpy.py and forecast_lstm.py. Run:  python tests/test_forecast_lstm.py   (or pytest)"""
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 import time
 
 import numpy as np
 import pandas as pd
 
-import forecast_lstm as F
-from lstm_numpy import LSTM, gradient_check
+from planets.forecast import forecast_lstm as F
+from planets.forecast.lstm_numpy import LSTM, gradient_check
 
 
 def _series(n_years=40, resid="noise", seed=0):

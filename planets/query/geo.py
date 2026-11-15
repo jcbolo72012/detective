@@ -8,7 +8,7 @@ Without that package installed, only the preset places work."""
 import re
 import unicodedata
 
-from catalog import PLACES
+from planets.query.catalog import PLACES
 
 try:
     import geonamescache

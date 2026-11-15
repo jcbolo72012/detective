@@ -3,7 +3,7 @@ import re
 
 import pandas as pd
 
-import providers
+from planets.sources import providers
 
 GROUPS = [  # (group, pattern on name + definition). First match wins.
     ("Temperature", r"temperature|dew|frost|degree days|heating|cooling"),

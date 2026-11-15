@@ -46,7 +46,7 @@ def pearson_adj(x, y):
 
 def strength(r):
     a = abs(r)
-    return "very weak or none" if a < 0.2 else "weak" if a < 0.4 else "moderate" if a < 0.6 else \
+    return "very weak" if a < 0.2 else "weak" if a < 0.4 else "moderate" if a < 0.6 else \
         "strong" if a < 0.8 else "very strong"
 
 

@@ -4,10 +4,10 @@ Same units (e.g. temperature in two places): also trend-tests the difference ser
 direct test of "is A changing faster than B?". Different units: compares direction and significance only."""
 import matplotlib.pyplot as plt
 import numpy as np
-from scipy import stats
 
-import correlation
-from trend_detective import analyze
+from planets.analysis import correlation
+from planets.ui import palette
+from planets.analysis.trend import analyze
 
 KEYS = ("sen_slope_per_decade", "ols_slope_per_decade", "ols_ci95_low", "ols_ci95_high", "mk_p_value",
         "ols_p_value", "significant", "tests_agree", "direction", "n_points", "start", "end",
@@ -90,7 +90,7 @@ def explain_template(ctx):
         return (f"**{x['label']}**: {m['direction']} by {abs(m['sen_slope_per_decade']):.3g} {x['units']} per decade "
                 f"(95% range {m['ols_ci95_low']:+.3g} to {m['ols_ci95_high']:+.3g}), "
                 f"{'significant' if m['significant'] else 'not significant'}.")
-    t = ctx["headline"] + "\n\n- " + one(a) + "\n- " + one(b)
+    t = "**The suspects, side by side.** " + ctx["headline"] + "\n\n- " + one(a) + "\n- " + one(b)
     if s.get("difference"):
         d = s["difference"]
         t += (f"\n- **Difference (A − B)**: changing by {d['sen_slope_per_decade']:+.3g} {a['units']} per decade, "
@@ -106,12 +106,12 @@ def overlay_figure(c, label_a, label_b, units_a, units_b, season=None):
     same = c["summary"]["same_units"]
     fig, ax = plt.subplots(figsize=(9, 4.2))
     mk = "o-" if season else "-"
-    for r, label, col in ((c["a"], label_a, "#33658a"), (c["b"], label_b, "#d1495b")):
+    for r, label, col in ((c["a"], label_a, palette.OCEAN), (c["b"], label_b, palette.AURORA)):
         scale = 1.0 if same else (float(r["anom"].std()) or 1.0)
         ax.plot(r["anom"].index, r["anom"].values / scale, mk, lw=0.9, ms=3, color=col, alpha=0.45)
         ax.plot(r["fit"].index, r["fit"].values / scale, lw=2.6, color=col,
                 ls="-" if r["metrics"]["significant"] else "--", label=label)
-    ax.axhline(0, color="k", lw=0.5)
+    ax.axhline(0, color=palette.GRID, lw=0.6)
     ax.set_ylabel(f"difference from normal ({units_a})" if same else "difference from normal (standard scores)")
     ax.set_title("Thin lines: data with the seasonal cycle removed. Thick lines: trend (dashed = not significant).",
                  fontsize=9, loc="left")
@@ -128,13 +128,13 @@ def scatter_figure(c, label_a, label_b, units_a, units_b, season=None):
     x, y = (aa - ra["fit"].reindex(aa.index)).values, (ab - rb["fit"].reindex(ab.index)).values
     d = c["corr"]["detrended"]
     fig, ax = plt.subplots(figsize=(4.6, 4.2))
-    ax.scatter(x, y, s=10, alpha=0.5, color="#33658a")
+    ax.scatter(x, y, s=10, alpha=0.55, color=palette.OCEAN)
     if np.std(x) > 0:
         b1, b0 = np.polyfit(x, y, 1)
         xs = np.array([x.min(), x.max()])
-        ax.plot(xs, b0 + b1 * xs, color="#d1495b", lw=2)
-    ax.axhline(0, color="k", lw=0.4)
-    ax.axvline(0, color="k", lw=0.4)
+        ax.plot(xs, b0 + b1 * xs, color=palette.CORAL, lw=2)
+    ax.axhline(0, color=palette.GRID, lw=0.6)
+    ax.axvline(0, color=palette.GRID, lw=0.6)
     ax.set_xlabel(f"{label_a}: above/below its trend ({units_a})", fontsize=8)
     ax.set_ylabel(f"{label_b} ({units_b})", fontsize=8)
     ax.set_title(f"r = {d['r']:+.2f}  ({'month' if not season else 'year'} by {'month' if not season else 'year'})".replace(
@@ -149,8 +149,8 @@ def lag_figure(c, label_a, label_b):
     lags = c["corr"]["lags"]
     fig, ax = plt.subplots(figsize=(6, 2.8))
     ks = [d["lag"] for d in lags]
-    ax.bar(ks, [d["r"] for d in lags], color=["#d1495b" if d["lag"] == 0 else "#33658a" for d in lags])
-    ax.axhline(0, color="k", lw=0.5)
+    ax.bar(ks, [d["r"] for d in lags], color=[palette.AURORA if d["lag"] == 0 else palette.OCEAN for d in lags])
+    ax.axhline(0, color=palette.GRID, lw=0.6)
     ax.set_xlabel(f"months by which {label_b} follows {label_a}  (negative: {label_b} leads)", fontsize=8)
     ax.set_ylabel("correlation", fontsize=8)
     ax.spines[["top", "right"]].set_visible(False)

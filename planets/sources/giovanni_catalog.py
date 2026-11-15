@@ -2,7 +2,7 @@
 
 One-time build (run on a computer that can reach NASA; commit the result so the hosted app has it):
 
-    python -m uv run python giovanni_catalog.py --build
+    python -m uv run python -m planets.sources.giovanni_catalog --build
 
 It downloads NASA's list of variables configured for Giovanni's cloud services
 (https://api.giovanni.earthdata.nasa.gov/configured-variables/), turns each ID into a readable name, and saves
@@ -11,14 +11,14 @@ If NASA wants a login for the list, it uses EARTHDATA_TOKEN from .env or asks fo
 
 Until the file exists, a small built-in starter list (STARTER) is used.
 """
+from planets import config
 import json
 import os
 import re
 import sys
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-CATALOG_FILE = os.path.join(HERE, "giovanni_vars.json")
-RAW_FILE = os.path.join(HERE, "giovanni_vars_raw.json")
+CATALOG_FILE = os.path.join(config.CATALOG_DIR, "giovanni_vars.json")
+RAW_FILE = os.path.join(config.CATALOG_DIR, "giovanni_vars_raw.json")
 LIST_URL = "https://api.giovanni.earthdata.nasa.gov/configured-variables/"
 PREFIX = "GIO:"  # catalog keys are "GIO:<giovanni id>" so they never clash with NASA POWER codes
 
@@ -393,13 +393,7 @@ def is_built():
 
 # ---------------------------------------------------------------------------------------------- build
 def _token_from_env():
-    path = os.path.join(HERE, ".env")
-    tok = os.getenv("EARTHDATA_TOKEN", "")
-    if not tok and os.path.exists(path):
-        for line in open(path, encoding="utf-8"):
-            if line.strip().startswith("EARTHDATA_TOKEN="):
-                tok = line.split("=", 1)[1].strip().strip('"').strip("'")
-    return tok
+    return config.env("EARTHDATA_TOKEN")
 
 
 def build(token=None, session=None):

@@ -2,35 +2,22 @@
 It never calculates. Works with no API key too (keyword parser + template text).
 
 Set ONE of:  ANTHROPIC_API_KEY  or  OPENAI_API_KEY   (optional: LLM_MODEL to override the model name)"""
+import contextvars
 import json
 import os
 import re
 
-import geo
-import providers
-from catalog import PLACES, RELATED
-from catalog import VARIABLES as CURATED
-from power import LAST_FULL_YEAR
-from retrieve import ALL as VARIABLES, search_question
+from planets import config
+from planets.query import geo
+from planets.sources import providers
+from planets.query.catalog import PLACES, RELATED
+from planets.query.catalog import VARIABLES as CURATED
+from planets.sources.power import LAST_FULL_YEAR
+from planets.query.retrieve import ALL as VARIABLES, search_question
 
 
 
-def _load_env(path=os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")):
-    """Read KEY=value lines from .env next to this file. Real environment variables win; blanks are ignored."""
-    if not os.path.exists(path):
-        return
-    with open(path, encoding="utf-8-sig") as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            k, v = line.split("=", 1)
-            k, v = k.strip(), v.strip().strip('"').strip("'")
-            if k and v and not os.environ.get(k):
-                os.environ[k] = v
-
-
-_load_env()
+config.load_env()
 
 SEASON_WORDS = {"summer": "JJA", "winter": "DJF", "spring": "MAM", "fall": "SON", "autumn": "SON"}
 SEASON_RE = re.compile(r"\b(" + "|".join(SEASON_WORDS) + r")s?\b")  # whole words only: "rainfall" is not "fall"
@@ -43,6 +30,22 @@ FLIP = {"JJA": "DJF", "DJF": "JJA", "MAM": "SON", "SON": "MAM"}
 
 
 _AI_CALLS = {"day": None, "n": 0}
+
+# A visitor's own Claude key. Per script run (each Streamlit session runs in its own context), never in os.environ,
+# a cache key, a log line or an error message, so it cannot reach another visitor. The app sets it on every run.
+USER_API_KEY = contextvars.ContextVar("user_api_key", default="")
+
+
+def set_user_key(raw):
+    """Use `raw` (a pasted Anthropic key) for this session's AI calls. Returns True if it looks like a key."""
+    key = re.sub(r"\s+", "", raw or "")
+    USER_API_KEY.set(key if key.startswith("sk-ant-") else "")
+    return bool(USER_API_KEY.get())
+
+
+def ai_mode():
+    """'user' (the visitor's own key), 'shared' (the app's key, under the daily cap) or '' (no AI)."""
+    return "user" if USER_API_KEY.get() else ("shared" if llm_available() else "")
 
 
 def _cap_reached():
@@ -59,23 +62,51 @@ def _cap_reached():
 
 
 def llm_available():
+    if USER_API_KEY.get():  # their own key: their own bill, so the shared daily cap does not apply
+        return True
     return bool(os.getenv("ANTHROPIC_API_KEY") or os.getenv("OPENAI_API_KEY")) and not _cap_reached()
 
 
+def check_user_key():
+    """(ok, message) for this session's own key, using one tiny request."""
+    if not USER_API_KEY.get():
+        return False, "That doesn't look like an Anthropic key (they start with sk-ant-)."
+    try:
+        _llm("Reply with the single word OK.", "ping", 5)
+        return True, "Key works. AI wording is on for your session."
+    except ValueError as e:
+        return False, str(e)
+
+
+def _claude(system, user, max_tokens, api_key=None):
+    import anthropic
+    client = anthropic.Anthropic(api_key=api_key) if api_key else anthropic.Anthropic()
+    msg = client.messages.create(
+        model=os.getenv("LLM_MODEL", "claude-haiku-5-5"), max_tokens=max_tokens + 2000,  # room for thinking
+        system=system, messages=[{"role": "user", "content": user}])
+    # the reply can start with a thinking block; keep only the text blocks
+    text = "".join(b.text for b in msg.content if getattr(b, "type", "") == "text")
+    if not text.strip():
+        raise ValueError(f"The AI returned no text (stop reason: {msg.stop_reason}). Try again.")
+    return text
+
+
 def _llm(system, user, max_tokens=500):
+    key = USER_API_KEY.get()
+    if key:
+        try:
+            return _claude(system, user, max_tokens, api_key=key)
+        except ValueError:
+            raise
+        except Exception as e:  # say what kind of failure, never echo the exception text (it could quote the key)
+            kind = type(e).__name__
+            hint = " Check the key in the sidebar." if "Authentication" in kind or "Permission" in kind else ""
+            raise ValueError(f"Your Claude key could not be used ({kind}).{hint}") from None
     if _cap_reached():
         raise ValueError("The AI daily limit was reached, so the app is using its no-AI mode for now.")
     _AI_CALLS["n"] += 1
     if os.getenv("ANTHROPIC_API_KEY"):
-        import anthropic
-        msg = anthropic.Anthropic().messages.create(
-            model=os.getenv("LLM_MODEL", "claude-haiku-5-5"), max_tokens=max_tokens + 2000,  # room for thinking
-            system=system, messages=[{"role": "user", "content": user}])
-        # the reply can start with a thinking block; keep only the text blocks
-        text = "".join(b.text for b in msg.content if getattr(b, "type", "") == "text")
-        if not text.strip():
-            raise ValueError(f"The AI returned no text (stop reason: {msg.stop_reason}). Try again.")
-        return text
+        return _claude(system, user, max_tokens)
     from openai import OpenAI
     out = OpenAI().chat.completions.create(
         model=os.getenv("LLM_MODEL", "gpt-4o-mini"),
@@ -177,7 +208,12 @@ def parse_question(q):
         "lat/lon: a representative point for the place (decimal degrees, west/south negative). "
         "season: only if the question names one; convert to the months that season has AT THAT PLACE "
         "(southern-hemisphere summer is DJF). Years: only if stated. Do not answer the question itself.")
-    txt = _llm(system, q, 300)
+    try:
+        txt = _llm(system, q, 300)
+    except ValueError:
+        if USER_API_KEY.get():  # their key failed: still answer, with the keyword parser
+            return parse_keywords(q), False
+        raise
     m = re.search(r"\{.*\}", txt, re.S)
     if not m:
         raise ValueError("The AI didn't return parameters. Try rephrasing, or use the menus.")
@@ -191,7 +227,9 @@ def parse_question(q):
 def explain_template(ctx):
     m, v = ctx["metrics"], ctx["variable"]
     when = f"{ctx['season']} " if ctx.get("season") else ""
-    t = (f"**{v['name']}** at **{ctx['place']}** has been **{m['direction']}** by about "
+    opener = ("**Case cracked, Detective.** " if m["significant"] else
+              "**The trail has gone cold, for now.** " if m["tests_agree"] else "**A hung jury.** ")
+    t = opener + (f"**{v['name']}** at **{ctx['place']}** has been **{m['direction']}** by about "
          f"**{abs(m['sen_slope_per_decade']):.3g} {v['units']} per decade** "
          f"({when}{m['start'][:4]}–{m['end'][:4]}; straight-line fit: {m['ols_slope_per_decade']:+.3g}, "
          f"95% range {m['ols_ci95_low']:+.3g} to {m['ols_ci95_high']:+.3g}). ")
@@ -208,7 +246,7 @@ def explain_template(ctx):
               "which makes the p-values look better than they are. ")
     if ctx.get("neighbors"):
         n = ctx["neighbors"]
-        t += (f"Nearby check: {n['same_direction']} of {n['n']} surrounding points trend the same way "
+        t += (f"Canvassing the neighbours: {n['same_direction']} of {n['n']} surrounding points trend the same way "
               f"({n['significant']} significantly). Neighbours share weather, so this is a consistency check, "
               "not extra independent proof. ")
     return t
@@ -231,7 +269,8 @@ def suggest_clues(ctx):
         return clues_fallback(var_id), False
     options = "\n".join(f'- {k}: {v["name"]} ({v["definition"]})' for k, v in CURATED.items() if k != var_id)
     system = (
-        "You help a student investigate environmental change like a detective. You are given a question, a place, "
+        "You are the Planeteer, sidekick to a student who is the detective investigating environmental change. "
+        "You are given a question, a place, "
         "the variable just analysed and its computed trend statistics. Suggest the 2 most useful variables to check "
         "NEXT at the same place, chosen ONLY from this list:\n" + options + "\n"
         'Reply with ONLY a JSON list: [{"variable": <id from the list>, "why": <one sentence>}, ...]. '
@@ -258,7 +297,9 @@ def explain(ctx):
     if not llm_available():
         return explain_template(ctx), False
     system = (
-        "You are a science communicator for high-school and college students. You are given the user's question "
+        "You are the Planeteer, a friendly science sidekick to a student detective (high-school or college). "
+        "Address them as Detective once, with at most one light, playful line; clarity comes first. "
+        "You are given the user's question "
         "and a JSON of statistics that were ALREADY computed by code. Write 4-6 sentences: (1) direct answer to "
         "the question, (2) how much it is changing per decade with units and the 95% range, (3) whether it is "
         "statistically significant and what that means in plain words, (4) any caveats present in the JSON "
@@ -368,7 +409,12 @@ def parse_compare(q):
         "two places, sometimes two variables at one place. Variable ids must come from this retrieved list ONLY:\n"
         + cat + "\nlat/lon: a representative point (decimal degrees, west/south negative). season: only if the "
         "question names one, as the months at place a. Years: only if stated. Do not answer the question itself.")
-    txt = _llm(system, q, 400)
+    try:
+        txt = _llm(system, q, 400)
+    except ValueError:
+        if USER_API_KEY.get():  # their key failed: still answer, with the keyword parser
+            return parse_compare_keywords(q), False
+        raise
     m = re.search(r"\{.*\}", txt, re.S)
     if not m:
         raise ValueError("The AI didn't return parameters. Try rephrasing, or use the menus below.")
@@ -384,7 +430,7 @@ def parse_compare(q):
 
 def explain_compare(ctx):
     """ctx = {question, season, headline, a{label,units,metrics}, b{...}, comparison{...}}. Returns (text, used_ai)."""
-    import compare as _cmp
+    from planets.analysis import compare as _cmp
     if not llm_available():
         return _cmp.explain_template(ctx), False
     system = (

@@ -1,6 +1,6 @@
 # Instructions: add four data sources to PLaNETS
 
-> **Status (executed Nov 14, 2026):** Phase 0, Phase 1 (`space_view.py`) and Phase 3 (`podaac.py`) are done and tested
+> **Status (executed Nov 14, 2026):** Phase 0, Phase 1 (`planets/ui/space_view.py`) and Phase 3 (`planets/sources/podaac.py`) are done and tested
 > live. **Phase 2 (AppEEARS) is blocked:** AppEEARS returns 403 for a valid Earthdata *token* (only username/password
 > login is documented), LP DAAC's MODIS monthly collections have no Harmony or OPeNDAP subsetting, and the ORNL DAAC
 > MODIS API is too slow (60 s per metadata call) and has no monthly NDVI. Options for a decision: AppEEARS with a
@@ -39,8 +39,8 @@ committed) that proves the call works with a real credential, and trust what it 
 - **Catalog entries** use the shape produced by `giovanni_catalog.make_entry`: `name, short_name, units, definition,
   source, keywords, provider, step, first_year, last_year, region` (plus source-specific ids). Keys get a source
   prefix so they never clash (`GIO:` exists; use `LPD:`, `POD:`, `FIRMS:`).
-- After adding or changing catalog entries or `lexicon.py`: `python retrieve.py --build-embeddings` and commit the
-  rebuilt `catalog_embeddings.npz`. Then run `python eval_retrieval.py` and `python eval_retrieval.py --heldout`; scores
+- After adding or changing catalog entries or `planets/query/lexicon.py`: `python -m planets.query.retrieve --build-embeddings` and commit the
+  rebuilt `data/catalog/catalog_embeddings.npz`. Then run `python eval/eval_retrieval.py` and `python eval/eval_retrieval.py --heldout`; scores
   must not drop (see "Retrieval hygiene").
 - Credit NASA in the UI caption for every new source, and add a line to the README "Data and credits" section.
 - Test through the real app: `streamlit.testing.v1.AppTest` (example at the end).
@@ -149,7 +149,7 @@ Use the product's quality layer where one exists and drop low-quality months rat
   ("Asking NASA AppEEARS: this can take a minute"), and for **neighbour checks** (`want_nb`, 5 points) do not fire 5
   jobs automatically for these variables; disable the neighbour option for AppEEARS variables, as Giovanni already
   does for cost (see the `not retrieve.is_giovanni(...)` condition near the neighbour checkbox in `investigate`).
-- Add `lexicon.py` entries for each id: greener, greening, browning, vegetation, plant growth, forest, crops healthy,
+- Add `planets/query/lexicon.py` entries for each id: greener, greening, browning, vegetation, plant growth, forest, crops healthy,
   "leaf cover", "greenness", "land surface temperature", "ground heat", "urban heat". Then rebuild embeddings.
 - Add `LAST_FULL_YEAR`-aware limits (the product lags a few weeks; ask for completed years only).
 
@@ -249,11 +249,11 @@ hidden and the hint says how to get one.
 
 ## Retrieval hygiene (after any catalog or lexicon change)
 
-1. `python retrieve.py --build-embeddings`, commit `catalog_embeddings.npz`.
+1. `python -m planets.query.retrieve --build-embeddings`, commit `data/catalog/catalog_embeddings.npz`.
 2. Add 3 to 5 questions per new variable to `eval/retrieval_cases.json` (and a few to `eval/retrieval_cases_heldout.json`
    written **before** you tune anything), with `"gio": true` style flags extended so token-gated entries are included
    (the eval's `giovanni=` argument controls this; extend it for the new providers).
-3. `python eval_retrieval.py` and `python eval_retrieval.py --heldout`. Existing scores (hybrid top-1 about 90 percent,
+3. `python eval/eval_retrieval.py` and `python eval/eval_retrieval.py --heldout`. Existing scores (hybrid top-1 about 90 percent,
    cov@3 about 95 percent) must not regress. If a new source steals questions from POWER, lower its weight rather
    than editing the lexicon of old variables.
 

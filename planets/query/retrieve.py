@@ -1,7 +1,7 @@
 """Retrieval over the variable catalog (the "R" in RAG).
 
-  python retrieve.py --build            # one-time: download NASA POWER's full monthly parameter catalog
-  python retrieve.py "is it getting muggier"   # try a search
+  python -m planets.query.retrieve --build            # one-time: download NASA POWER's full monthly parameter catalog
+  python -m planets.query.retrieve "is it getting muggier"   # try a search
 
 Index = curated entries in catalog.py (with plain-language keywords) + every POWER parameter in
 power_params.json (if built) + Giovanni variables. Search is hybrid: TF-IDF (scikit-learn) and sentence
@@ -10,8 +10,8 @@ rank fusion. A hand-written lexicon (lexicon.py) adds everyday phrases per varia
 corrected against catalog words, and off-topic questions return nothing. Without the embedding file or model
 it runs on TF-IDF alone.
 
-  python retrieve.py --build-embeddings   # rerun after the catalog or lexicon.py changes
-  python eval_retrieval.py                # score retrieval (add --heldout for the set not tuned against)"""
+  python -m planets.query.retrieve --build-embeddings   # rerun after the catalog or lexicon.py changes
+  python eval/eval_retrieval.py                # score retrieval (add --heldout for the set not tuned against)"""
 import contextvars
 import difflib
 import fnmatch
@@ -27,14 +27,14 @@ import requests
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import linear_kernel
 
-import giovanni_catalog
-import providers
-from catalog import VARIABLES
-from explorer import HOURLY
-from lexicon import LEXICON
+from planets import config
+from planets.sources import giovanni_catalog
+from planets.sources import providers
+from planets.query.catalog import VARIABLES
+from planets.ui.explorer import HOURLY
+from planets.query.lexicon import LEXICON
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-PARAMS_FILE = os.path.join(HERE, "power_params.json")
+PARAMS_FILE = os.path.join(config.CATALOG_DIR, "power_params.json")
 MANAGER_URL = "https://power.larc.nasa.gov/api/system/manager/parameters"
 
 
@@ -160,7 +160,7 @@ def fix_typos(text):
 
 # ---- embeddings: vectors are computed ahead of time (--build-embeddings) and committed; only the question is
 # embedded at run time, with a small ONNX model (fastembed, no torch). Any failure falls back to TF-IDF alone.
-EMB_FILE = os.path.join(HERE, "catalog_embeddings.npz")
+EMB_FILE = os.path.join(config.CATALOG_DIR, "catalog_embeddings.npz")
 EMB_MODEL = "BAAI/bge-small-en-v1.5"
 USE_HYBRID = True
 RRF_K, RRF_DEPTH = 60, 50
@@ -331,7 +331,7 @@ def search(question, k=5, min_score=0.03, giovanni=None, hybrid=None):
 def variable_text(question):
     """The question with place names and years removed, so the variable search sees only what is being measured
     ("Is Sahara dust rising near Cairo since 1990" must not match catalog text that mentions the Sahara or 1990)."""
-    import geo
+    from planets.query import geo
     words = geo.fold(question).split()
     drop = [False] * len(words)
     for pl in geo.find_places(question, max_alts=0):

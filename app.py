@@ -1,4 +1,5 @@
-"""PLaNETS (Plain-Language NASA Earth Trend Sleuth) - interactive app.
+"""The Planeteer: the PLaNETS app (Plain-Language NASA Earth Trend Sleuth). The student is the detective;
+the Planeteer is their sidekick that fetches NASA evidence and runs the tests.
 Run:   pip install streamlit pandas numpy scipy matplotlib requests   (+ anthropic or openai, + mlflow: optional)
        streamlit run app.py
 Flow:  question -> [AI or keywords] parameters -> NASA POWER / Giovanni CSV -> analyze() in code -> [AI or template] explanation
@@ -18,26 +19,28 @@ try:  # lets worker threads share this session's Streamlit context (cache, no "m
 except Exception:  # older Streamlit or test stub
     add_script_run_ctx = get_script_run_ctx = None
 
-import compare
-import explorer
-import forecast_client
-import forecast_lstm
-import glossary
-import geo
-import giovanni
-import giovanni_catalog
-import giovanni_live
-import retrieve
-import nl
-import power
-import providers
-import space_view
-from catalog import DEMO_QUESTIONS, PLACES, VARIABLES
-from retrieve import ALL, search
-from trend_detective import analyze, load_giovanni_csv
+from planets.analysis import compare
+from planets.ui import explorer
+from planets.forecast import forecast_lstm
+from planets.analysis import emergence
+from planets.ui import share
+from planets.ui import glossary
+from planets.ui import look, palette
+from planets.query import geo
+from planets.sources import case_files
+from planets.sources import giovanni_catalog
+from planets.sources import giovanni_live
+from planets.query import retrieve
+from planets.query import nl
+from planets.sources import power
+from planets.sources import providers
+from planets.ui import space_view
+from planets.query.catalog import DEMO_QUESTIONS, PLACES, VARIABLES
+from planets.query.retrieve import ALL, search
+from planets.analysis.trend import analyze, load_giovanni_csv
 
 try:
-    import podaac
+    from planets.sources import podaac
 except ImportError:  # netCDF4 not installed: the PO.DAAC ocean variables are simply not offered
     podaac = None
 
@@ -47,7 +50,11 @@ try:
 except ImportError:
     HAS_MLFLOW = False
 
-st.set_page_config(page_title="PLaNETS: Plain-Language NASA Earth Trend Sleuth", page_icon="🔎", layout="wide")
+st.set_page_config(page_title="The Planeteer · PLaNETS", page_icon="🌍", layout="wide")
+look.apply()
+MODE_LABELS = {"Ask a question": "🔎 Ask the Planeteer", "Compare two trends": "⚖️ Compare two suspects",
+               "Pick from menus": "🧭 Pick from menus", "Case files (Giovanni CSV)": "🗂️ Case files (Giovanni CSV)",
+               "Explore variables": "🔭 Explore the evidence locker"}
 SEASON_LABELS = {None: "All months (seasonal cycle removed)", "DJF": "Dec–Feb", "MAM": "Mar–May",
                  "JJA": "Jun–Aug", "SON": "Sep–Nov"}
 
@@ -131,9 +138,10 @@ def get_many(reqs):
     tok = gio_token()
     n_gio = sum(retrieve.is_giovanni(r[0]) for r in reqs)
     n_pod = sum(providers.provider_of(r[0]) == "podaac" for r in reqs)
-    label = (f"Fetching {len(reqs)} series from NASA at once…" if len(reqs) > 1 else
+    label = (f"🛰️ The Planeteer is fetching {len(reqs)} series from NASA at once…" if len(reqs) > 1 else
              "Asking NASA PO.DAAC (one small request per month, about a minute)…" if n_pod else
-             "Asking NASA Giovanni (long hourly records come in several pieces)…" if n_gio else "Fetching NASA data…")
+             "Asking NASA Giovanni (long hourly records come in several pieces)…" if n_gio else
+             "🛰️ The Planeteer is fetching NASA data…")
     with st.spinner(label):
         out = run_parallel([partial(_fetch, *r, tok) for r in reqs])
     meta = st.session_state.setdefault("gio_meta", {})
@@ -178,8 +186,24 @@ class _NoCache(Exception):
 
 
 @st.cache_data(show_spinner=False)
-def ai_parse(q, ai_on, gio_on=False):
+def _ai_parse_cached(q, ai_on, gio_on=False):
     return nl.parse_question(q)
+
+
+def _own_key_cached(kind, fn, q, gio_on):
+    """Answers computed with a visitor's own Claude key are kept in that visitor's session only (so a click does not
+    call Claude again), never in the shared cache, and are redone if the key changes."""
+    store = st.session_state.setdefault("_own_key_parses", {})
+    k = (kind, q, bool(gio_on), hash(nl.USER_API_KEY.get()))
+    if k not in store:
+        store[k] = fn(q)
+    return store[k]
+
+
+def ai_parse(q, ai_on, gio_on=False):
+    if ai_on == "user":
+        return _own_key_cached("parse", nl.parse_question, q, gio_on)
+    return _ai_parse_cached(q, ai_on, gio_on)
 
 
 @st.cache_data(show_spinner=False)
@@ -204,8 +228,14 @@ def _clues_cached(ctx_json, ai_on):
 
 
 @st.cache_data(show_spinner=False)
-def ai_parse_compare(q, ai_on, gio_on=False):
+def _ai_parse_compare_cached(q, ai_on, gio_on=False):
     return nl.parse_compare(q)
+
+
+def ai_parse_compare(q, ai_on, gio_on=False):
+    if ai_on == "user":
+        return _own_key_cached("compare", nl.parse_compare, q, gio_on)
+    return _ai_parse_compare_cached(q, ai_on, gio_on)
 
 
 @st.cache_data(show_spinner=False)
@@ -218,7 +248,7 @@ def _explain_compare_cached(ctx_json, ai_on):
 
 def _cached(fn, ctx):
     try:
-        return fn(json.dumps(ctx, sort_keys=True, default=str), nl.llm_available())
+        return fn(json.dumps(ctx, sort_keys=True, default=str), nl.ai_mode())
     except _NoCache as e:
         return e.value
 
@@ -294,14 +324,14 @@ def trend_figure(res, title, units, season):
     s, anom, fit, m = res["series"], res["anom"], res["fit"], res["metrics"]
     mk = "o-" if season else "-"
     fig, ax = plt.subplots(2, 1, figsize=(9, 5.5), sharex=True)
-    ax[0].plot(s.index, s.values, mk, lw=1, ms=3, color="#33658a")
+    ax[0].plot(s.index, s.values, mk, lw=1, ms=3, color=palette.OCEAN)
     ax[0].set_ylabel(units)
     ax[0].set_title(title + (f" ({SEASON_LABELS[season]} mean each year)" if season else " (monthly)"), fontsize=11)
-    ax[1].plot(anom.index, anom.values, mk, lw=1, ms=3, color="#9aa0a6",
+    ax[1].plot(anom.index, anom.values, mk, lw=1, ms=3, color=palette.MUTED,
                label="difference from normal" + ("" if season else " for that month"))
-    ax[1].plot(fit.index, fit.values, lw=2.5, color="#d1495b" if m["significant"] else "#e0a030",
+    ax[1].plot(fit.index, fit.values, lw=2.5, color=palette.CORAL if m["significant"] else palette.SUN,
                label=f"trend {m['ols_slope_per_decade']:+.3g} {units}/decade")
-    ax[1].axhline(0, color="k", lw=0.5)
+    ax[1].axhline(0, color=palette.GRID, lw=0.6)
     ax[1].set_ylabel(f"anomaly ({units})")
     ax[1].legend(fontsize=8, frameon=False)
     for a in ax:
@@ -343,7 +373,7 @@ def _lstm_forecast(values, start, horizon, epochs):
 def render_forecast(series, var, p):
     """LSTM forecast, trained here in NumPy (forecast_lstm.py). Code computes everything; the AI is not involved."""
     key = "fc_" + "|".join(str(p.get(k)) for k in ("variable", "place", "start_year", "end_year"))
-    with st.expander("🔮 Forecast with an LSTM (experimental)"):
+    with st.expander("🔮 Peek into the future with an LSTM (experimental)"):
         st.caption("The straight line handles the trend and the seasons; a small LSTM, trained right now on this "
                    "series, learns what the line misses. Both are tested by forecasting 2 years from 4 earlier "
                    "dates and comparing with what actually happened. Check those tests before trusting a projection.")
@@ -356,7 +386,7 @@ def render_forecast(series, var, p):
             st.session_state["fc_used"] = used + 1
             s = series.dropna()
             try:
-                with st.spinner("Training LSTMs and testing them on past years (a few seconds)…"):
+                with st.spinner("The Planeteer is training LSTMs and testing them on past years (a few seconds)…"):
                     st.session_state[key] = _lstm_forecast(tuple(float(v) for v in s.values),
                                                            str(s.index[0].to_period("M")), horizon, epochs)
             except ValueError as e:  # gaps, too short, too long
@@ -415,11 +445,11 @@ def investigate(p, question=None, series=None, var=None):
         st.pyplot(trend_figure(res, var["name"], var["units"], p["season"]))
     with right:
         if m["significant"]:
-            st.success(f"**Verdict: significant {m['direction']} trend**")
+            st.success(f"**Verdict: a significant {m['direction']} trend.** The evidence holds up, Detective.")
         elif m["tests_agree"]:
-            st.warning("**Verdict: no significant trend (yet)**")
+            st.warning("**Verdict: no significant trend (yet).** Not enough evidence to call it.")
         else:
-            st.warning("**Verdict: borderline (the two tests disagree)**")
+            st.warning("**Verdict: borderline.** The two tests disagree, so the case stays open.")
         c1, c2 = st.columns(2)
         c1.metric("Change per decade", f"{m['sen_slope_per_decade']:+.3g} {var['units']}",
                   help=glossary.tip("change_per_decade"))
@@ -428,10 +458,16 @@ def investigate(p, question=None, series=None, var=None):
         c1.metric("Mann-Kendall p", f"{m['mk_p_value']:.3g}", help=glossary.tip("mk_p"))
         c2.metric("t-test p", f"{m['ols_p_value']:.3g}", help=glossary.tip("ols_p"))
         st.caption(f"{m['n_points']} points, {m['start'][:4]}–{m['end'][:4]} · p < 0.05 counts as significant")
+        em = emergence.years_to_significance(res)
+        em_value = {"significant": f"Detectable since ~{em['detectable_from']}",
+                    "on_track": f"~{em['more_years']:.0f} more years" if em["more_years"] is not None else "—",
+                    "too_slow": "Centuries", "flat": "No trend to detect"}[em["status"]]
+        st.metric("⏳ Years until significant", em_value, help=glossary.tip("years_until"))
+        st.caption(emergence.describe(em, var["units"], m["direction"]))
         if nb:
-            st.info(f"**Nearby check:** {nb['same_direction']} of {nb['n']} surrounding points (~100 km) trend "
+            st.info(f"**Canvassing the neighbours:** {nb['same_direction']} of {nb['n']} surrounding points (~100 km) trend "
                     f"the same way; {nb['significant']} significantly.")
-    ctx = dict(question=question, place=p["place"], season=p["season"], metrics=m, neighbors=nb,
+    ctx = dict(question=question, place=p["place"], season=p["season"], metrics=m, neighbors=nb, emergence=em,
                variable={k: var[k] for k in ("name", "units", "definition")}, variable_id=p["variable"])
     text, used_ai = _cached(_explain_cached, ctx)
     if retrieve.is_giovanni(p["variable"]):
@@ -444,7 +480,7 @@ def investigate(p, question=None, series=None, var=None):
                    + {"POD:SST": "Sea surface temperature is NOAA's ERSST v5, distributed by PO.DAAC. ",
                       "POD:SSH": "One satellite map per month (nearest the 15th), not a monthly mean. "}.get(p["variable"], "")
                    + "Credit NASA PO.DAAC when you share results.")
-    st.markdown("#### What the detective found")
+    st.markdown("#### 🛰️ The Planeteer's report")
     st.markdown(text)
     st.caption(("Wording by AI from the computed numbers. " if used_ai else "") +
                "All statistics are calculated in code (SciPy), never by the AI.")
@@ -452,20 +488,20 @@ def investigate(p, question=None, series=None, var=None):
     if series is None:  # next clues (not for Giovanni CSV case files: no live data to follow up with)
         clues, clue_ai = _cached(_clues_cached, ctx)
         if clues:
-            st.markdown("#### Next clues")
+            st.markdown("#### 🔍 Leads worth following, Detective")
             for i, c in enumerate(clues):
                 cv = ALL[c["variable"]]
                 a, b = st.columns([3, 2])
                 a.markdown(f"**{cv['name']}**: {c['why']}")
                 case = {**{k: p[k] for k in ("place", "lat", "lon", "season", "start_year", "end_year")},
                         "variable": c["variable"], "came_from": var["name"], "question": question}
-                b.button(f"Investigate {cv['name']} here", key=f"clue_{p['variable']}_{c['variable']}_{i}",
+                b.button(f"Follow the lead: {cv['name']}", key=f"clue_{p['variable']}_{c['variable']}_{i}",
                          on_click=_push_followup, args=(case,), width="stretch")
             st.caption(("Suggested by AI. " if clue_ai else "") +
-                       "These are hypotheses to check, not explanations. Same place, months and years.")
+                       "These are hunches to check, not explanations. Same place, months and years.")
     if series is None:  # live data only: case-file CSVs have no real place to look at
         space_view.render(p, p["variable"], var["name"])
-    with st.expander("Case file: exact numbers and data"):
+    with st.expander("🗂️ Case file: exact numbers and data"):
         st.json(m)
         st.download_button("Download series (CSV)", res["series"].to_csv(), "series.csv")
 
@@ -536,7 +572,7 @@ def render_compare(case, question=None):
             st.caption("Different units, so the lines are drawn in standard scores and there is no A − B test.")
     cr = c["corr"]
     if cr:
-        st.markdown("#### How closely do they move together?")
+        st.markdown("#### 🤝 Are they in cahoots? How closely they move together")
         d, w = cr["detrended"], cr["with_trends"]
         m1, m2, m3 = st.columns(3)
         m1.metric("Correlation (trends removed)", f"{d['r']:+.2f}",
@@ -578,7 +614,7 @@ def render_compare(case, question=None):
                b=dict(label=lb, variable=vb["name"], units=vb["units"], metrics=c["b_brief"]),
                comparison=c["summary"])
     expl, used_ai = _cached(_explain_compare_cached, ctx)
-    st.markdown("#### What the detective found")
+    st.markdown("#### 🛰️ The Planeteer's report")
     st.markdown(expl)
     st.caption(("Wording by AI from the computed numbers. " if used_ai else "") +
                "All statistics are calculated in code (SciPy), never by the AI.")
@@ -588,48 +624,113 @@ def render_compare(case, question=None):
                 "came_from": "the comparison", "origin": "compare", "question": None}
         col.button(f"Open {lab} on its own", key=f"cmp_solo_{side['variable']}_{side['place']}_{lab}",
                    on_click=_push_followup, args=(solo,), width="stretch")
-    with st.expander("Case file: exact numbers"):
+    with st.expander("🗂️ Case file: exact numbers"):
         st.json({"A": c["a_brief"], "B": c["b_brief"], "comparison": c["summary"]})
 
 
 
+def _check_gio_token():
+    """Runs when a token is pasted (or 'Check again'): ask NASA's quota endpoint whether it works."""
+    tok = gio_token()
+    if not tok:
+        st.session_state.pop("gio_status", None)
+        return
+    try:
+        q = giovanni_live.check_token(tok)
+        st.session_state["gio_status"] = ("ok", f"Token works. {q:.0%} of this month's Giovanni quota used.")
+    except giovanni_live.GiovanniError as e:
+        kind = "bad" if e.kind == "auth" else "unknown"  # NASA unreachable isn't the token's fault
+        msg = str(e) if kind == "bad" else f"Couldn't check the token right now ({e}). It may still work."
+        st.session_state["gio_status"] = (kind, msg)
+
+
+def _forget_gio_token():
+    st.session_state["gio_token"] = ""
+    for k in ("gio_status", "gio_meta"):
+        st.session_state.pop(k, None)
+
+
 # ------------------------------------------------------------------ UI
-st.title("🔎 PLaNETS")
-st.caption("**Pl**ain-**La**nguage **N**ASA **E**arth **T**rend **S**leuth: ask what is changing, where. "
-           "NASA data answers; statistics say whether it's real.")
+st.title("🌍 The Planeteer")
+st.caption("**You're the detective.** Ask what's changing on Earth, and your sidekick fetches the NASA evidence "
+           "and puts it on trial. Statistics decide what's real. · *PLaNETS: **Pl**ain-**La**nguage **N**ASA "
+           "**E**arth **T**rend **S**leuthing*")
+
+if not st.session_state.get("_link_loaded"):  # a shared link: reproduce what it describes
+    st.session_state["_link_loaded"] = True
+    try:
+        opened = share.read(st.query_params.to_dict(), nl.validate)
+    except ValueError as e:
+        opened = None
+        st.warning(str(e))
+    if opened:
+        kind, val = opened
+        if kind == "ask":
+            st.session_state.update(mode="Ask a question", q=val)
+        elif kind == "compare_q":
+            st.session_state.update(mode="Compare two trends", cmp_q=val)
+        elif kind == "case":
+            st.session_state["followup"] = [{**val, "came_from": "a shared link", "origin": "link", "question": None}]
+        elif kind == "pair":
+            st.session_state.update(mode="Compare two trends", cmp_q_done="",
+                                    cmp_case={**val, "question": None, "used_ai": False})
 
 with st.sidebar:
-    mode = st.radio("How do you want to investigate?", ["Ask a question", "Compare two trends", "Pick from menus", "Case files (Giovanni CSV)",
+    mode = st.radio("How shall we investigate, Detective?", ["Ask a question", "Compare two trends", "Pick from menus", "Case files (Giovanni CSV)",
                      "Explore variables"],
-                    on_change=_clear_followup)
-    with st.expander("🛰️ NASA Giovanni: " + ("connected" if gio_token() else "add your login"),
-                     expanded=False):
+                    on_change=_clear_followup, key="mode", format_func=lambda m: MODE_LABELS.get(m, m))
+    share_slot = st.empty()  # filled at the end of the run with a link to whatever is on screen
+    stt = st.session_state.get("gio_status")
+    gio_label = ("add your login" if not gio_token() else
+                 "token rejected ⚠️" if stt and stt[0] == "bad" else
+                 "token added (not checked)" if stt and stt[0] == "unknown" else "connected ✅")
+    with st.expander("🛰️ NASA Giovanni: " + gio_label, expanded=bool(stt and stt[0] == "bad")):
         st.caption("Adds satellite, model and ocean variables (dust, ozone, snow, soil moisture, pollution, sea "
-                   "temperature, sea level…) to every mode, "
-                   "fetched live with **your own** free Earthdata token. Kept in this browser session only: never "
-                   "saved or logged, and sent only to NASA.")
-        st.markdown(f"[Get a token]({giovanni_live.TOKEN_URL}) → *Generate Token*, copy, paste here.")
-        st.text_input("Earthdata token", type="password", key="gio_token", placeholder="paste token")
+                   "temperature, sea level…) to every mode, fetched live with **your own** free Earthdata token. "
+                   "Kept in this browser session only: never saved, logged or put in links, and sent only to NASA.")
+        if not gio_token():
+            st.markdown(
+                f"1. Sign in at **[Earthdata Login]({giovanni_live.TOKEN_URL})** (or *Register*: free, about 2 minutes).\n"
+                "2. Open the **Generate Token** tab, click **Generate Token**, then copy it (the long text "
+                "starting with `ey…`).\n"
+                "3. Paste it below. It's checked with NASA straight away.\n\n"
+                "First time using Giovanni? Under **Applications → Authorized Apps**, approve "
+                "**NASA GESDISC DATA ARCHIVE**, or NASA will refuse the data.")
+        st.text_input("Earthdata token", type="password", key="gio_token", placeholder="paste token",
+                      on_change=_check_gio_token)
+        if stt and gio_token():
+            {"ok": st.success, "bad": st.error, "unknown": st.warning}[stt[0]](stt[1])
         if gio_token():
-            if st.button("Check token", key="gio_check"):
-                try:
-                    q = giovanni_live.check_token(gio_token())
-                    st.session_state["gio_status"] = ("ok", f"Token works. {q:.0%} of this month's Giovanni quota used.")
-                except giovanni_live.GiovanniError as e:
-                    st.session_state["gio_status"] = ("bad", str(e))
-            stt = st.session_state.get("gio_status")
-            if stt:
-                (st.success if stt[0] == "ok" else st.error)(stt[1])
+            g1, g2 = st.columns(2)
+            g1.button("Check again", key="gio_check", on_click=_check_gio_token, width="stretch")
+            g2.button("Forget token", key="gio_forget", on_click=_forget_gio_token, width="stretch")
         n_gio = sum(1 for k in ALL if retrieve.is_giovanni(k))
         st.caption(f"{n_gio} Giovanni variables available" +
-                   ("" if giovanni_catalog.is_built() else " (starter list; run `giovanni_catalog.py --build` for "
+                   ("" if giovanni_catalog.is_built() else " (starter list; run `python -m planets.sources.giovanni_catalog --build` for "
                                                           "NASA's full list)"))
     retrieve.GIOVANNI_ON.set(bool(gio_token()))
+    with st.expander("🤖 Use your own Claude key (optional)"):
+        st.caption("Optional: the app works without it. With a key, Claude words the explanations and picks the "
+                   "variable from your question. It's billed to **your** Anthropic account, kept in this browser "
+                   "session only (never saved, logged or put in links), and sent only to Anthropic. All statistics "
+                   "are still computed in code.")
+        st.text_input("Anthropic API key", type="password", key="user_claude_key", placeholder="sk-ant-…")
+        own_key = nl.set_user_key(st.session_state.get("user_claude_key"))
+        if st.session_state.get("user_claude_key") and not own_key:
+            st.warning("That doesn't look like an Anthropic key (they start with sk-ant-).")
+        if own_key:
+            k1, k2 = st.columns(2)
+            if k1.button("Test key", key="claude_test", width="stretch"):
+                ok, msg = nl.check_user_key()
+                (st.success if ok else st.error)(msg)
+            k2.button("Forget key", key="claude_forget", width="stretch",
+                      on_click=lambda: st.session_state.update(user_claude_key=""))
     st.checkbox("Compare with nearby points (slower)", key="do_neighbors")
     if HAS_MLFLOW:
         st.checkbox("Log each case to MLflow", key="do_mlflow")
     st.divider()
-    st.caption("AI: " + ("connected ✅" if nl.llm_available() else "no API key, using keyword matching + template text"))
+    st.caption("AI: " + {"user": "using your Claude key ✅", "shared": "connected ✅",
+                         "": "no API key, using keyword matching + template text"}[nl.ai_mode()])
     st.caption({"ready": "Search: keywords + meaning (embeddings)",
                 "loading": "Search: keywords only while the meaning model loads",
                 "failed": "Search: keywords only (meaning model unavailable; retrying)",
@@ -639,10 +740,10 @@ with st.sidebar:
                + (f" + {sum(1 for k in ALL if providers.provider_of(k) == 'podaac')} PO.DAAC ocean" if gio_token() else ""))
     st.caption("Places: any city over 15,000 people, country or US state, no AI needed" if geo.AVAILABLE else
                "Places: 14 presets only without an AI key. Run `uv sync` to add the offline city list.")
-    with st.expander("📖 Glossary: what the numbers mean"):
+    with st.expander("📖 Detective's glossary: what the numbers mean"):
         for label, text in glossary.TERMS.values():
             st.markdown(f"**{label}**: {text}")
-    with st.expander("Featured variables"):
+    with st.expander("⭐ Featured variables"):
         for v in VARIABLES.values():
             st.markdown(f"**{v['name']}** ({v['units']}): {v['definition']}")
 
@@ -654,11 +755,11 @@ try:
         fu = trail[-1]
         b1, b2 = st.columns([1, 6])
         b1.button("← Back", on_click=_pop_followup)
-        if fu.get("origin") in ("explorer", "compare"):
+        if fu.get("origin") in ("explorer", "compare", "link"):
             b2.caption(f"Opened from **{fu['came_from']}**")
         else:
-            b2.caption(f"Following a clue from **{fu['came_from']}** · same place, months and years"
-                       + (f" · clue {len(trail)} in this trail" if len(trail) > 1 else ""))
+            b2.caption(f"Following a lead from **{fu['came_from']}** · same place, months and years"
+                       + (f" · lead {len(trail)} in this trail" if len(trail) > 1 else ""))
         investigate(fu, question=fu.get("question"))
 
     elif mode == "Ask a question":
@@ -666,7 +767,7 @@ try:
         for c, dq in zip(cols, DEMO_QUESTIONS):
             if c.button(dq, width="stretch"):
                 st.session_state["q"] = dq
-        q = st.text_input("Your question", key="q", placeholder="Is Phoenix getting hotter in summer?")
+        q = st.text_input("What's your hunch, Detective?", key="q", placeholder="Is Phoenix getting hotter in summer?")
         pair = question_pair(q, bool(gio_token())) if q else None
         one_only = bool(pair) and st.checkbox("Investigate just one variable instead", key=f"ask_one_{q}")
         if pair and not one_only:  # "hotter and drier": test the two variables against each other
@@ -680,20 +781,21 @@ try:
                 st.caption("Your question names more variables than a comparison can hold (two), so "
                            + ", ".join(ALL[v]["name"] for v in pair["others"]) + " was left out. Ask about it separately.")
         elif q:
-            p0, used_ai = ai_parse(q, nl.llm_available(), bool(gio_token()))
+            p0, used_ai = ai_parse(q, nl.ai_mode(), bool(gio_token()))
             p = dict(p0)
             ov = st.session_state.get("ask_override")
             if ov and ov.get("q") == q:  # a "did you mean" correction for this question
                 p = {**nl.validate({**p0, **ov["fields"]}), "candidates": p0["candidates"],
                      "place_alts": p0.get("place_alts", [])}
-            st.caption(f"Understood as: **{ALL[p['variable']]['name']}** at **{p['place']}** "
+                st.session_state["_link_case"] = p
+            st.caption(f"The Planeteer heard: **{ALL[p['variable']]['name']}** at **{p['place']}** "
                        f"({p['lat']:.2f}, {p['lon']:.2f}) · {SEASON_LABELS[p['season']]} · "
                        f"{p['start_year']}–{p['end_year']}" + ("" if used_ai else " · keyword match"))
             other_vars = [cid for cid, _ in p0["candidates"] if cid != p["variable"]][:3]
             places = [dict(label=p0["place"], lat=p0["lat"], lon=p0["lon"])] + list(p0.get("place_alts", []))
             other_places = [x for x in places if x["label"] != p["place"]][:3]
             if other_vars or other_places:
-                st.caption("Not what you meant? Pick another:")
+                st.caption("Wrong suspect? Pick another:")
                 btn_cols = st.columns(max(1, len(other_vars) + len(other_places)))
                 for col, cid in zip(btn_cols, other_vars):
                     col.button(ALL[cid]["name"], key=f"dym_var_{cid}", width="stretch",
@@ -701,7 +803,7 @@ try:
                 for col, x in zip(btn_cols[len(other_vars):], other_places):
                     col.button(f"📍 {x['label']}", key=f"dym_place_{x['label']}", width="stretch",
                                on_click=_set_override, args=(q, {"place": x["label"], "lat": x["lat"], "lon": x["lon"]}))
-            with st.expander(f"How I chose the variable: searched {len(ALL)} catalog entries"):
+            with st.expander(f"How the Planeteer picked the variable: searched {len(ALL)} catalog entries"):
                 for cid, sc in p["candidates"]:
                     st.markdown(("✅ " if cid == p["variable"] else "· ") +
                                 f"**{ALL[cid]['name']}** (`{cid}`), match score {sc}")
@@ -712,17 +814,17 @@ try:
             investigate(p, question=q)
 
     elif mode == "Compare two trends":
-        st.caption("Compare one variable in two places, or two variables in one place.")
+        st.caption("Line up two suspects: one variable in two places, or two variables in one place.")
         cols = st.columns(len(COMPARE_EXAMPLES))
         for col, ex in zip(cols, COMPARE_EXAMPLES):
             if col.button(ex, width="stretch", key=f"cmp_ex_{ex}"):
                 st.session_state["cmp_q"] = ex
-        cq = st.text_input("Your comparison question", key="cmp_q",
+        cq = st.text_input("Which two trends should go head to head?", key="cmp_q",
                            placeholder="Is Svalbard warming faster than London?")
         if cq and cq != st.session_state.get("cmp_q_done"):
             st.session_state["cmp_q_done"] = cq
             st.session_state.pop("cmp_case", None)
-            case, used_ai = ai_parse_compare(cq, nl.llm_available(), bool(gio_token()))
+            case, used_ai = ai_parse_compare(cq, nl.ai_mode(), bool(gio_token()))
             st.session_state["cmp_case"] = {**case, "question": cq, "used_ai": used_ai}
         with st.expander("Or pick from menus", expanded=not st.session_state.get("cmp_case")):
             m1, m2 = st.columns(2)
@@ -772,9 +874,9 @@ try:
 
     elif mode == "Explore variables":
         df = variable_table(len(ALL))
-        cases = giovanni.case_files()
+        cases = case_files.case_files()
         shown = explorer.filter_table(df)
-        st.subheader("What can I investigate?")
+        st.subheader("🔭 The evidence locker: what can you investigate?")
         st.markdown(
             f"A **variable** is one thing NASA measures about the Earth and tracks over time. This app knows "
             f"**{int(df['Featured'].sum())} featured** variables with plain-language definitions, "
@@ -843,7 +945,7 @@ try:
                 f"- {geo.ATTRIBUTION}. A country or state is represented by its largest city.")
 
     else:
-        cases = giovanni.case_files()
+        cases = case_files.case_files()
         if not cases:
             st.info("No case files yet. Use the links below, then save each CSV into the `data/` folder.")
         else:
@@ -869,8 +971,38 @@ try:
             st.markdown("Each link opens Giovanni with the request filled in. Sign in with a free Earthdata login, "
                         "click **Plot Data**, then **Downloads → CSV**, and save the file into the `data/` folder. "
                         "It appears here on the next refresh, described automatically.")
-            for r in giovanni.RECIPES:
+            for r in case_files.RECIPES:
                 st.markdown(f"- **[{r['title']}]({r['url']})**: {r['why']} "
                             f"If the variable isn't preselected, search Giovanni for `{r['keyword']}`.")
 except Exception as e:
-    st.error(str(e))
+    st.error(f"**Dead end.** {e}")
+
+
+# ------------------------------------------------------------------ shareable link for what's on screen
+def _link_params():
+    trail = st.session_state.get("followup") or []
+    if trail:
+        return share.case_params(trail[-1])
+    if mode == "Ask a question" and st.session_state.get("q"):
+        lc = st.session_state.get("_link_case")
+        ov = st.session_state.get("ask_override")
+        if lc and ov and ov.get("q") == st.session_state["q"]:
+            return share.case_params(lc)
+        return {"q": st.session_state["q"]}
+    if mode == "Compare two trends" and st.session_state.get("cmp_case"):
+        c = st.session_state["cmp_case"]
+        return {"cq": c["question"]} if c.get("question") else share.pair_params(c)
+    if mode == "Pick from menus" and st.session_state.get("menu_case"):
+        return share.case_params(st.session_state["menu_case"])
+    return {}
+
+
+_lp = _link_params()
+if _lp != st.query_params.to_dict():
+    st.query_params.from_dict(_lp)
+if _lp:
+    with share_slot.container():
+        with st.expander("🔗 Share this case"):
+            st.code(share.full_url(_lp, getattr(st.context, "url", None)), language=None, wrap_lines=True)
+            st.caption("Opens exactly this result. Giovanni and PO.DAAC data still need the visitor's own "
+                       "Earthdata token; no keys or tokens are ever put in links.")
