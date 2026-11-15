@@ -241,6 +241,9 @@ def explain_template(ctx):
               "that a trend this size could be chance. A longer record might settle it. ")
     else:
         t += "The two tests **disagree**, so treat this as a borderline, 'maybe' trend. "
+    if m.get("seasonal_cycle_kept"):
+        t += ("The seasonal cycle was **kept** in this test, so the swing between summer and winter counts as "
+              "noise; that makes a real trend harder to detect than with the cycle removed. ")
     if m["lag1_autocorr_resid"] > 0.3:
         t += (f"Caution: neighbouring months are strongly related (autocorrelation {m['lag1_autocorr_resid']:.2f}), "
               "which makes the p-values look better than they are. ")
@@ -304,7 +307,8 @@ def explain(ctx):
         "the question, (2) how much it is changing per decade with units and the 95% range, (3) whether it is "
         "statistically significant and what that means in plain words, (4) any caveats present in the JSON "
         "(autocorrelation above 0.3, tests disagreeing, short record, neighbour disagreement; neighbours are not "
-        "independent evidence), (5) one 'next clue': another variable worth checking and why. "
+        "independent evidence; if metrics.seasonal_cycle_kept is true, say the summer-winter swing was left in and "
+        "counts as noise, which makes the test weaker), (5) one 'next clue': another variable worth checking and why. "
         "RULES: use ONLY numbers from the JSON, never compute or invent numbers, do not claim a cause as fact "
         "(say 'one possible driver'), do not extrapolate into the future.")
     payload = {k: ctx[k] for k in ("question", "place", "season", "variable", "metrics", "neighbors") if ctx.get(k) is not None}

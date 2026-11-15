@@ -11,15 +11,15 @@ from planets.analysis.trend import analyze
 
 KEYS = ("sen_slope_per_decade", "ols_slope_per_decade", "ols_ci95_low", "ols_ci95_high", "mk_p_value",
         "ols_p_value", "significant", "tests_agree", "direction", "n_points", "start", "end",
-        "lag1_autocorr_resid")
+        "lag1_autocorr_resid", "seasonal_cycle_kept")
 
 
 def _brief(m):
     return {k: (round(m[k], 5) if isinstance(m[k], float) else m[k]) for k in KEYS}
 
 
-def compare(sa, sb, season=None, same_units=True):
-    ra, rb = analyze(sa, season), analyze(sb, season)
+def compare(sa, sb, season=None, same_units=True, keep_cycle=False):
+    ra, rb = analyze(sa, season, keep_cycle), analyze(sb, season, keep_cycle)
     ma, mb = ra["metrics"], rb["metrics"]
     rd = None
     common = sa.index.intersection(sb.index)
@@ -28,7 +28,7 @@ def compare(sa, sb, season=None, same_units=True):
         raise ValueError("A and B returned identical data. The two places are probably in the same NASA grid "
                          "cell (about 50 km across), so pick places further apart.")
     if same_units and len(common) >= 24:
-        rd = analyze(sa[common] - sb[common], season)
+        rd = analyze(sa[common] - sb[common], season, keep_cycle)
     # do the wiggles around each trend move together? (trends removed first; autocorrelation-adjusted p)
     corr = correlation.correlate(ra, rb, season)
     corr_summary = {k: v for k, v in corr.items() if k != "lags"} if corr else None
@@ -113,7 +113,9 @@ def overlay_figure(c, label_a, label_b, units_a, units_b, season=None):
                 ls="-" if r["metrics"]["significant"] else "--", label=label)
     ax.axhline(0, color=palette.GRID, lw=0.6)
     ax.set_ylabel(f"difference from normal ({units_a})" if same else "difference from normal (standard scores)")
-    ax.set_title("Thin lines: data with the seasonal cycle removed. Thick lines: trend (dashed = not significant).",
+    kept = c["a"]["metrics"].get("seasonal_cycle_kept")
+    ax.set_title(f"Thin lines: data with the seasonal cycle {'kept' if kept else 'removed'}. "
+                 "Thick lines: trend (dashed = not significant).",
                  fontsize=9, loc="left")
     ax.legend(fontsize=9, frameon=False)
     ax.spines[["top", "right"]].set_visible(False)

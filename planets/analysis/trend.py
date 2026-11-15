@@ -1,7 +1,8 @@
 """Trend statistics for one monthly series: everything the app's verdicts come from.
 
-  analyze(series, season=None) -> {series, anom, fit, metrics}
+  analyze(series, season=None, keep_cycle=False) -> {series, anom, fit, metrics}
   - seasonal cycle removed (monthly anomalies), or one value per year for a season (e.g. "JJA")
+  - keep_cycle=True (all months only): the seasonal cycle stays in, so the tests treat it as noise
   - OLS slope per decade with 95% CI and t-test p; Mann-Kendall test and Sen's slope; lag-1 autocorrelation
   - significant = both tests p < 0.05
 
@@ -121,12 +122,17 @@ def lag1_autocorr(y):
 
 
 # ---------------------------------------------------------------- 4. models
-def analyze(s, season=None):
+def analyze(s, season=None, keep_cycle=False):
     """Monthly pd.Series -> dict with the analysed series, anomalies, fitted line and metrics.
-    All numbers the app (and the AI explanation) shows come from here."""
+    All numbers the app (and the AI explanation) shows come from here.
+    keep_cycle (all months only): test the raw monthly values, seasonal cycle included. The summer-winter swing
+    then counts as noise, so the tests are weaker and their assumptions hold less well; the default removes it."""
+    keep_cycle = bool(keep_cycle and not season)  # one value per year has no cycle to keep
     if season:
         s = seasonal_annual(s, parse_season(season))
         anom, steps_per_year = s - s.mean(), 1
+    elif keep_cycle:
+        anom, steps_per_year = s - s.mean(), 12
     else:
         anom, steps_per_year = deseasonalize(s)[0], 12
     if len(s) < 8:
@@ -138,7 +144,7 @@ def analyze(s, season=None):
     fit = r.intercept + r.slope * x
     m = {**ols, **mk, "lag1_autocorr_resid": lag1_autocorr(anom.values - fit),
          "n_points": int(len(s)), "start": str(s.index[0].date()), "end": str(s.index[-1].date()),
-         "mean": float(s.mean())}
+         "mean": float(s.mean()), "seasonal_cycle_kept": keep_cycle}
     m["significant"] = bool(m["ols_p_value"] < 0.05 and m["mk_p_value"] < 0.05)
     m["tests_agree"] = bool((m["ols_p_value"] < 0.05) == (m["mk_p_value"] < 0.05))
     m["direction"] = "increasing" if m["sen_slope_per_decade"] > 0 else "decreasing"

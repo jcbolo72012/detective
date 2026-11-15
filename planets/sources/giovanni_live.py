@@ -65,7 +65,7 @@ def parse_timeseries_csv(text):
     starts the data. Returns (raw_series, meta). Raises GiovanniError('parse'|'empty') with the raw head."""
     head = text[:600]
     rows = list(csv.reader(io.StringIO(text.lstrip("﻿"))))
-    meta = {"fill": None, "units": None, "header": None, "title": None}
+    meta = {"fill": None, "units": None, "header": None, "title": None, "doi": None, "product": None}
     first = None
     for i, r in enumerate(rows):
         if len(r) < 2:
@@ -79,6 +79,10 @@ def parse_timeseries_csv(text):
                 pass
         if low.startswith("unit") and len(r) > 1:
             meta["units"] = r[-1].strip() or None
+        if low == "doi" and r[1].strip():
+            meta["doi"] = r[1].strip()
+        if low == "prod_name" and r[1].strip():
+            meta["product"] = r[1].strip()
         if low in ("title", "name", "param_name") and len(r) > 1:
             meta["title"] = r[1].strip()
         try:

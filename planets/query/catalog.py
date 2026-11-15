@@ -6,11 +6,13 @@ VARIABLES = {
     "T2M": dict(name="Air temperature", units="°C", source="NASA POWER (MERRA-2)",
                 definition="Average air temperature 2 m above the ground: what a weather station thermometer reads.",
                 keywords=["temperature", "hot", "hotter", "warm", "warming", "heat", "cold", "cooler"]),
-    "T2M_MAX": dict(name="Daily maximum temperature", units="°C", source="NASA POWER (MERRA-2)",
-                    definition="Average of each day's highest temperature. Good for heatwave questions.",
+    "T2M_MAX": dict(name="Hottest temperature of the month", units="°C", source="NASA POWER (MERRA-2)",
+                    definition="The single hottest hour of each month, 2 m above the ground (NASA POWER's monthly maximum). "
+                               "Good for heatwave questions.",
                     keywords=["heatwave", "heat wave", "hottest", "maximum temperature", "daytime high", "extreme heat"]),
-    "T2M_MIN": dict(name="Daily minimum temperature", units="°C", source="NASA POWER (MERRA-2)",
-                    definition="Average of each day's lowest temperature, usually at night.",
+    "T2M_MIN": dict(name="Coldest temperature of the month", units="°C", source="NASA POWER (MERRA-2)",
+                    definition="The single coldest hour of each month, 2 m above the ground, usually at night "
+                               "(NASA POWER's monthly minimum).",
                     keywords=["night", "nights", "minimum temperature", "frost", "coldest", "overnight"]),
     "PRECTOTCORR": dict(name="Precipitation", units="mm/day", source="NASA POWER (MERRA-2, bias-corrected)",
                         definition="Rain plus melted snow, as an average depth of water per day.",

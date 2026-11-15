@@ -4,6 +4,7 @@ Run:   pip install streamlit pandas numpy scipy matplotlib requests   (+ anthrop
        streamlit run app.py
 Flow:  question -> [AI or keywords] parameters -> NASA POWER / Giovanni CSV -> analyze() in code -> [AI or template] explanation
 """
+import datetime as dt
 import json
 import os
 import threading
@@ -55,8 +56,19 @@ look.apply()
 MODE_LABELS = {"Ask a question": "🔎 Ask the Planeteer", "Compare two trends": "⚖️ Compare two suspects",
                "Pick from menus": "🧭 Pick from menus", "Case files (Giovanni CSV)": "🗂️ Case files (Giovanni CSV)",
                "Explore variables": "🔭 Explore the evidence locker"}
-SEASON_LABELS = {None: "All months (seasonal cycle removed)", "DJF": "Dec–Feb", "MAM": "Mar–May",
+SEASON_LABELS = {None: "All months", "DJF": "Dec–Feb", "MAM": "Mar–May",
                  "JJA": "Jun–Aug", "SON": "Sep–Nov"}
+
+
+def keep_cycle():
+    """Sidebar toggle: feed the seasonal cycle into the trend tests (all-months analyses only)."""
+    return bool(st.session_state.get("keep_cycle"))
+
+
+def season_text(season):
+    if season:
+        return SEASON_LABELS[season]
+    return "All months (seasonal cycle kept)" if keep_cycle() else "All months (seasonal cycle removed)"
 
 
 @st.cache_data(show_spinner=False, ttl=24 * 3600)
@@ -68,7 +80,8 @@ def _power_series(param, lat, lon, start, end):
 def _giovanni_series(gid, lat, lon, start, end, step, _token):
     """_token starts with an underscore so Streamlit never hashes or stores it as part of the cache key."""
     got = giovanni_live.fetch(gid, lat, lon, start, end, _token, step=step)
-    return got["series"], got["meta"].get("display_units") or "", got["note"]
+    return (got["series"], got["meta"].get("display_units") or "", got["note"],
+            dict(doi=got["meta"].get("doi"), product=got["meta"].get("product")))
 
 
 @st.cache_data(show_spinner=False, ttl=24 * 3600, max_entries=100)
@@ -112,14 +125,14 @@ def _fetch(param, lat, lon, start, end, tok):
             raise ValueError(f"'{ALL[param]['short_name']}' comes from NASA Giovanni, which needs your free "
                              "Earthdata token. Add it under 'NASA Giovanni' in the sidebar.")
         try:
-            s, units, note = _giovanni_series(param[len(giovanni_catalog.PREFIX):], lat, lon, start, end,
-                                              ALL[param].get("step") or "", tok)
+            s, units, note, cite = _giovanni_series(param[len(giovanni_catalog.PREFIX):], lat, lon, start, end,
+                                                    ALL[param].get("step") or "", tok)
         except giovanni_live.GiovanniError as e:
             msg = f"NASA Giovanni: {e}"
             if e.raw and e.kind in ("parse", "request"):
                 msg += f"\n\nWhat NASA sent back: `{e.raw[:200]}`"
             raise ValueError(msg)
-        return s, dict(units=units, note=note)
+        return s, dict(units=units, note=note, **cite)
     if providers.provider_of(param) == "podaac":
         if not tok:
             raise ValueError(f"'{ALL[param]['short_name']}' comes from NASA PO.DAAC, which needs your free "
@@ -327,8 +340,10 @@ def trend_figure(res, title, units, season):
     ax[0].plot(s.index, s.values, mk, lw=1, ms=3, color=palette.OCEAN)
     ax[0].set_ylabel(units)
     ax[0].set_title(title + (f" ({SEASON_LABELS[season]} mean each year)" if season else " (monthly)"), fontsize=11)
+    kept = m.get("seasonal_cycle_kept")
     ax[1].plot(anom.index, anom.values, mk, lw=1, ms=3, color=palette.MUTED,
-               label="difference from normal" + ("" if season else " for that month"))
+               label=("difference from the overall average (seasonal cycle kept)" if kept else
+                      "difference from normal" + ("" if season else " for that month")))
     ax[1].plot(fit.index, fit.values, lw=2.5, color=palette.CORAL if m["significant"] else palette.SUN,
                label=f"trend {m['ols_slope_per_decade']:+.3g} {units}/decade")
     ax[1].axhline(0, color=palette.GRID, lw=0.6)
@@ -351,7 +366,7 @@ def neighbor_check(p, own_slope, series=None):
         if s is None:
             continue
         try:
-            out.append(analyze(s, p["season"])["metrics"])
+            out.append(analyze(s, p["season"], keep_cycle())["metrics"])
         except Exception:
             pass
     if not out:
@@ -416,6 +431,96 @@ def render_forecast(series, var, p):
                    f"emissions or policy. Trained in {res['seconds']} s with NumPy (no PyTorch).")
 
 
+POWER_REFERENCE = ("The data was obtained from National Aeronautics and Space Administration (NASA) Langley Research "
+                   "Center's Prediction Of Worldwide Energy Resources (POWER) project funded through the NASA Earth "
+                   "Science Division.")
+PODAAC_SOURCES = {  # dataset pages and citations as PO.DAAC publishes them
+    "POD:SST": dict(title="NOAA Extended Reconstructed Sea Surface Temperature (ERSST) v5, distributed by NASA PO.DAAC",
+                    about="https://podaac.jpl.nasa.gov/dataset/REYNOLDS_NCDC_L4_MONTHLY_V5", doi="10.5067/ERSST-L4N50",
+                    cite="Smith, T., Reynolds, R. 2015. NCDC Smith & Reynolds Historical Reconstructed Sea Surface "
+                         "Temperature Data Sets. Ver. 5. PO.DAAC, CA, USA. Dataset accessed {date} at "
+                         "https://doi.org/10.5067/ERSST-L4N50"),
+    "POD:SSH": dict(title="NASA-SSH Simple Gridded Sea Surface Height, distributed by NASA PO.DAAC",
+                    about="https://podaac.jpl.nasa.gov/NASA-SSH", doi=None,
+                    cite="Willis, J. K., S. Fournier, K. Marlis, E. Killett and J. Sanchez. NASA-SSH Simple Gridded Sea "
+                         "Surface Height from Standardized Reference Missions. PO.DAAC, CA, USA. Dataset accessed {date}."),
+}
+
+
+def _where(p):
+    lat, lon = float(p["lat"]), float(p["lon"])
+    return (f"{abs(lat):.2f}°{'N' if lat >= 0 else 'S'}, {abs(lon):.2f}°{'E' if lon >= 0 else 'W'}")
+
+
+def source_info(p, var, series):
+    """Where one series came from: title, citation text and links (no tokens ever go into these links)."""
+    code, today = p["variable"], dt.date.today().isoformat()
+    span = (f"{series.index[0]:%b %Y}–{series.index[-1]:%b %Y}" if series is not None and len(series)
+            else f"{p['start_year']}–{p['end_year']}")
+    detail = f"Monthly values at {_where(p)} ({p['place']}), {span}."
+    meta = (st.session_state.get("gio_meta") or {}).get(code, {})
+    if retrieve.is_giovanni(code):
+        gid = code[len(giovanni_catalog.PREFIX):]
+        product = meta.get("product")
+        about = (f"https://disc.gsfc.nasa.gov/datasets/{product.replace('.', '_')}/summary" if product
+                 else f"https://disc.gsfc.nasa.gov/datasets?keywords={gid}")
+        doi = meta.get("doi")
+        cite = (f"{var['name']}. Product {product or gid}, NASA Goddard Earth Sciences Data and Information Services "
+                f"Center (GES DISC)" + (f", https://doi.org/{doi}" if doi else "") +
+                f". Accessed {today} via the NASA Giovanni time-series API.")
+        return dict(title=f"NASA GES DISC via Giovanni · {var.get('source', '').split('·')[-1].strip()}",
+                    detail=detail + (f" {meta['note']}" if meta.get("note") else ""), cite=cite,
+                    view=about, view_label="Open the dataset at NASA GES DISC",
+                    about=f"https://doi.org/{doi}" if doi else None, about_label="Dataset DOI",
+                    view_note="Downloading from NASA needs your own free Earthdata login.")
+    if providers.provider_of(code) == "podaac":
+        info = PODAAC_SOURCES.get(code, {})
+        concept = podaac.PRODUCTS[code[len(podaac.PREFIX):]]["concept"]
+        return dict(title=info.get("title", var.get("source", "NASA PO.DAAC")),
+                    detail=detail + (f" {meta['note']}" if meta.get("note") else ""),
+                    cite=info.get("cite", "NASA PO.DAAC. Dataset accessed {date}.").format(date=today),
+                    view=f"https://search.earthdata.nasa.gov/search/granules?p={concept}",
+                    view_label="Browse the files in NASA Earthdata Search",
+                    about=info.get("about"), about_label="About this dataset",
+                    view_note="Downloading from NASA needs your own free Earthdata login.")
+    # NASA POWER: the exact request the app made, as a CSV anyone can open (no login)
+    start = max(int(p["start_year"]), 1984 if code.startswith("ALLSKY") else 1981)
+    end = min(int(p["end_year"]), power.LAST_FULL_YEAR)
+    view = (f"{power.URL}?parameters={code}&community=AG&latitude={round(float(p['lat']), 3)}"
+            f"&longitude={round(float(p['lon']), 3)}&start={start}&end={end}&format=CSV")
+    underlying = var.get("source", "").replace("NASA POWER", "").strip(" ()")
+    underlying = "" if underlying in ("SOURCE", "POWER") else underlying
+    return dict(title="NASA POWER (Prediction Of Worldwide Energy Resources)" + (f", from {underlying}" if underlying else ""),
+                detail=detail + f" Parameter `{code}`.",
+                cite=f"{POWER_REFERENCE} POWER monthly point API, parameter {code}, accessed {today}.",
+                view=view, view_label="View this exact data at NASA (CSV)",
+                about="https://power.larc.nasa.gov/docs/", about_label="About NASA POWER", view_note=None)
+
+
+def source_box(p, var, series, tag, heading=None):
+    """Prominent citation for one series, with a direct link to the source data and a download."""
+    info = source_info(p, var, series)
+    with st.container(border=True):
+        st.markdown(f"##### 📚 Source{': ' + heading if heading else ''}")
+        st.markdown(f"**{info['title']}**")
+        st.caption(info["detail"])
+        st.caption("Cite as:")
+        st.code(info["cite"], language=None, wrap_lines=True)
+        b1, b2, b3 = st.columns(3)
+        short = heading is not None  # narrow column in compare mode: short labels
+        b1.link_button("🔗 View at NASA" if short else f"🔗 {info['view_label']}", info["view"], width="stretch",
+                       help=info["view_label"])
+        if info.get("about"):
+            b2.link_button("About" if short else info["about_label"], info["about"], width="stretch",
+                           help=info["about_label"])
+        if series is not None:
+            b3.download_button("⬇️ CSV" if short else "⬇️ Download what we used (CSV)", series.rename(p["variable"]).to_csv(),
+                               f"{p['variable']}_{p['start_year']}-{p['end_year']}.csv", mime="text/csv",
+                               key=f"src_dl_{tag}_{p['variable']}_{p['lat']}_{p['lon']}", width="stretch")
+        if info.get("view_note"):
+            st.caption(info["view_note"])
+
+
 def investigate(p, question=None, series=None, var=None):
     """p = validated params. `series`/`var` are passed for Giovanni CSV case files."""
     want_nb = (series is None and st.session_state.get("do_neighbors")
@@ -434,7 +539,7 @@ def investigate(p, question=None, series=None, var=None):
     else:
         s = series
     var = var or var_info(p["variable"])
-    res = analyze(s, p["season"])
+    res = analyze(s, p["season"], keep_cycle())
     m = res["metrics"]
     nb = neighbor_check(p, m["sen_slope_per_decade"], nb_series) if want_nb else None
 
@@ -470,16 +575,16 @@ def investigate(p, question=None, series=None, var=None):
     ctx = dict(question=question, place=p["place"], season=p["season"], metrics=m, neighbors=nb, emergence=em,
                variable={k: var[k] for k in ("name", "units", "definition")}, variable_id=p["variable"])
     text, used_ai = _cached(_explain_cached, ctx)
-    if retrieve.is_giovanni(p["variable"]):
-        gm = (st.session_state.get("gio_meta") or {}).get(p["variable"], {})
-        st.caption(f"Live from NASA Giovanni (`{p['variable'][len(giovanni_catalog.PREFIX):]}`) with your Earthdata "
-                   f"token. {gm.get('note', '')} Data: NASA GES DISC; credit NASA when you share results.")
-    elif providers.provider_of(p["variable"]) == "podaac":
-        gm = (st.session_state.get("gio_meta") or {}).get(p["variable"], {})
-        st.caption(f"Live from NASA PO.DAAC with your Earthdata token. {gm.get('note', '')} "
-                   + {"POD:SST": "Sea surface temperature is NOAA's ERSST v5, distributed by PO.DAAC. ",
-                      "POD:SSH": "One satellite map per month (nearest the 15th), not a monthly mean. "}.get(p["variable"], "")
-                   + "Credit NASA PO.DAAC when you share results.")
+    if m.get("seasonal_cycle_kept"):
+        st.info("**Seasonal cycle kept.** Each month is compared with the overall average, so the swing between "
+                "summer and winter counts as noise in the tests. That makes a real trend harder to detect, and the "
+                "tests' assumptions hold less well. Turn off *Keep the seasonal cycle* in the sidebar for the "
+                "standard analysis.")
+    elif keep_cycle() and p.get("season"):
+        st.caption("The seasonal-cycle toggle has no effect here: one season gives one value per year, so there is "
+                   "no cycle to keep.")
+    if series is None:
+        source_box(p, var, s, "main")
     st.markdown("#### 🛰️ The Planeteer's report")
     st.markdown(text)
     st.caption(("Wording by AI from the computed numbers. " if used_ai else "") +
@@ -539,7 +644,7 @@ def render_compare(case, question=None):
         raise ea if ea is not None else eb
     va, vb = var_info(pa["variable"]), var_info(pb["variable"])
     same_units = pa["variable"] == pb["variable"] or (va["units"] == vb["units"] and bool(va["units"]))
-    c = compare.compare(sa, sb, pa["season"], same_units)
+    c = compare.compare(sa, sb, pa["season"], same_units, keep_cycle())
     la, lb = _label(pa, pb), _label(pb, pa)
     text, kind = compare.headline(c, la, lb)
     if pa["variable"] == pb["variable"]:
@@ -548,7 +653,11 @@ def render_compare(case, question=None):
         st.subheader(f"{la} vs {lb} · {pa['place']}")
     else:
         st.subheader(f"{la} vs {lb}")
-    st.caption(f"{SEASON_LABELS[pa['season']]} · {pa['start_year']}–{pa['end_year']}")
+    st.caption(f"{season_text(pa['season'])} · {pa['start_year']}–{pa['end_year']}")
+    if c["a"]["metrics"].get("seasonal_cycle_kept"):
+        st.info("**Seasonal cycle kept.** The summer-winter swing stays in both series, so it counts as noise in the "
+                "trend tests and can make the two look more alike than they really are. Turn off *Keep the seasonal "
+                "cycle* in the sidebar for the standard analysis.")
     {"success": st.success, "warning": st.warning, "info": st.info}[kind](f"**{text}**")
     left, right = st.columns([3, 2])
     with left:
@@ -624,6 +733,11 @@ def render_compare(case, question=None):
                 "came_from": "the comparison", "origin": "compare", "question": None}
         col.button(f"Open {lab} on its own", key=f"cmp_solo_{side['variable']}_{side['place']}_{lab}",
                    on_click=_push_followup, args=(solo,), width="stretch")
+    s1, s2 = st.columns(2)
+    with s1:
+        source_box(pa, va, sa, "a", heading=f"A: {la}")
+    with s2:
+        source_box(pb, vb, sb, "b", heading=f"B: {lb}")
     with st.expander("🗂️ Case file: exact numbers"):
         st.json({"A": c["a_brief"], "B": c["b_brief"], "comparison": c["summary"]})
 
@@ -664,6 +778,8 @@ if not st.session_state.get("_link_loaded"):  # a shared link: reproduce what it
         st.warning(str(e))
     if opened:
         kind, val = opened
+        if st.query_params.get("sc") == "1":
+            st.session_state["keep_cycle"] = True
         if kind == "ask":
             st.session_state.update(mode="Ask a question", q=val)
         elif kind == "compare_q":
@@ -725,6 +841,10 @@ with st.sidebar:
             k2.button("Forget key", key="claude_forget", width="stretch",
                       on_click=lambda: st.session_state.update(user_claude_key=""))
     st.checkbox("Compare with nearby points (slower)", key="do_neighbors")
+    st.toggle("Keep the seasonal cycle in the trend tests", key="keep_cycle",
+              help="Off (standard): each month is compared with its own normal, so only real change over the years "
+                   "is tested. On: the summer-winter swing stays in the data and counts as noise, which shows why "
+                   "scientists usually remove it. Applies to all-months analyses, not single seasons.")
     if HAS_MLFLOW:
         st.checkbox("Log each case to MLflow", key="do_mlflow")
     st.divider()
@@ -774,7 +894,7 @@ try:
                     "Tick the box above to investigate just one.")
             st.caption(f"Understood as: **{ALL[pair['a']['variable']]['name']}** at **{pair['a']['place']}** "
                        f"and **{ALL[pair['b']['variable']]['name']}** at **{pair['b']['place']}** · "
-                       f"{SEASON_LABELS[pair['season']]} · {pair['start_year']}–{pair['end_year']} · keyword match")
+                       f"{season_text(pair['season'])} · {pair['start_year']}–{pair['end_year']} · keyword match")
             render_compare({**pair, "question": q}, question=q)
             if pair.get("others"):
                 st.caption("Your question names more variables than a comparison can hold (two), so "
@@ -788,7 +908,7 @@ try:
                      "place_alts": p0.get("place_alts", [])}
                 st.session_state["_link_case"] = p
             st.caption(f"The Planeteer heard: **{ALL[p['variable']]['name']}** at **{p['place']}** "
-                       f"({p['lat']:.2f}, {p['lon']:.2f}) · {SEASON_LABELS[p['season']]} · "
+                       f"({p['lat']:.2f}, {p['lon']:.2f}) · {season_text(p['season'])} · "
                        f"{p['start_year']}–{p['end_year']}" + ("" if used_ai else " · keyword match"))
             other_vars = [cid for cid, _ in p0["candidates"] if cid != p["variable"]][:3]
             places = [dict(label=p0["place"], lat=p0["lat"], lon=p0["lon"])] + list(p0.get("place_alts", []))
@@ -997,6 +1117,8 @@ def _link_params():
 
 
 _lp = _link_params()
+if _lp and keep_cycle():
+    _lp["sc"] = "1"
 if _lp != st.query_params.to_dict():
     st.query_params.from_dict(_lp)
 if _lp:
