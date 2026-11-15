@@ -101,17 +101,20 @@ def ols_trend(s):
     }, r
 
 
-def mann_kendall(y):
-    """Mann-Kendall trend test (no ties correction) + Sen's slope (per step)."""
+def mann_kendall(y, t=None):
+    """Mann-Kendall trend test (no ties correction) + Sen's slope (per step).
+    t: each value's position in steps (e.g. month number). Sen's slope divides by the real distance in time, so a
+    gap in the record doesn't squeeze the time axis and bias the slope. Default: consecutive steps."""
     y = np.asarray(y)
     n = len(y)
+    t = np.arange(n, dtype=float) if t is None else np.asarray(t, dtype=float)
     diff = y[None, :] - y[:, None]
     iu = np.triu_indices(n, 1)
     S = np.sign(diff[iu]).sum()
     var_s = n * (n - 1) * (2 * n + 5) / 18
     z = (S - np.sign(S)) / np.sqrt(var_s) if S != 0 else 0.0
     p = 2 * (1 - stats.norm.cdf(abs(z)))
-    slopes = diff[iu] / (iu[1] - iu[0])
+    slopes = diff[iu] / (t[iu[1]] - t[iu[0]])
     return {"mk_S": float(S), "mk_z": float(z), "mk_p_value": float(p),
             "sen_slope_per_step": float(np.median(slopes))}
 
@@ -138,7 +141,8 @@ def analyze(s, season=None, keep_cycle=False):
     if len(s) < 8:
         raise ValueError(f"Only {len(s)} points after processing; need a longer record.")
     ols, r = ols_trend(anom)
-    mk = mann_kendall(anom.values)
+    steps = anom.index.year.values if season else anom.index.year.values * 12 + anom.index.month.values
+    mk = mann_kendall(anom.values, steps)
     mk["sen_slope_per_decade"] = mk.pop("sen_slope_per_step") * 10 * steps_per_year
     x = (anom.index - anom.index[0]).days.values / 365.25
     fit = r.intercept + r.slope * x

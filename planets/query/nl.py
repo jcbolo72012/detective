@@ -247,6 +247,9 @@ def explain_template(ctx):
     if m["lag1_autocorr_resid"] > 0.3:
         t += (f"Caution: neighbouring months are strongly related (autocorrelation {m['lag1_autocorr_resid']:.2f}), "
               "which makes the p-values look better than they are. ")
+    dc = ctx.get("data_check")
+    if dc and dc["level"] != "green":
+        t += f"Data check: {'; '.join(dc['issues'])}. "
     if ctx.get("neighbors"):
         n = ctx["neighbors"]
         t += (f"Canvassing the neighbours: {n['same_direction']} of {n['n']} surrounding points trend the same way "
@@ -308,10 +311,11 @@ def explain(ctx):
         "statistically significant and what that means in plain words, (4) any caveats present in the JSON "
         "(autocorrelation above 0.3, tests disagreeing, short record, neighbour disagreement; neighbours are not "
         "independent evidence; if metrics.seasonal_cycle_kept is true, say the summer-winter swing was left in and "
-        "counts as noise, which makes the test weaker), (5) one 'next clue': another variable worth checking and why. "
+        "counts as noise, which makes the test weaker; if data_check.level is not 'green', mention its issues), (5) one 'next clue': another variable worth checking and why. "
         "RULES: use ONLY numbers from the JSON, never compute or invent numbers, do not claim a cause as fact "
         "(say 'one possible driver'), do not extrapolate into the future.")
-    payload = {k: ctx[k] for k in ("question", "place", "season", "variable", "metrics", "neighbors") if ctx.get(k) is not None}
+    payload = {k: ctx[k] for k in ("question", "place", "season", "variable", "metrics", "neighbors", "data_check")
+               if ctx.get(k) is not None}
     try:
         return _llm(system, json.dumps(payload, default=str), 500), True
     except Exception as e:  # never let the explanation break the demo

@@ -22,7 +22,7 @@ import sys
 from pathlib import Path
 
 _PLANETS_STAMP = max(f.stat().st_mtime for f in (Path(__file__).resolve().parent / "planets").rglob("*.py"))
-if "planets" in sys.modules and getattr(sys.modules["planets"], "_stamp", None) != _PLANETS_STAMP:
+if getattr(sys.modules.get("planets"), "_stamp", _PLANETS_STAMP) != _PLANETS_STAMP:  # loaded by an older run
     for _mod in [m for m in sys.modules if m == "planets" or m.startswith("planets.")]:
         del sys.modules[_mod]
 import planets  # noqa: E402
@@ -38,6 +38,7 @@ from planets.analysis import compare
 from planets.ui import explorer
 from planets.forecast import forecast_lstm
 from planets.analysis import emergence
+from planets.analysis import quality
 from planets.ui import share
 from planets.ui import glossary
 from planets.ui import look, palette
@@ -380,6 +381,7 @@ def neighbor_check(p, own_slope, series=None):
         if s is None:
             continue
         try:
+            s, _ = data_check(p, var_info(p["variable"]), s)
             out.append(analyze(s, p["season"], keep_cycle())["metrics"])
         except Exception:
             pass
@@ -511,11 +513,42 @@ def source_info(p, var, series):
                 about="https://power.larc.nasa.gov/docs/", about_label="About NASA POWER", view_note=None)
 
 
-def source_box(p, var, series, tag, heading=None):
+def check_years(p, var):
+    """The years this variable can actually cover inside the requested span (what the data check expects)."""
+    code, y0, y1 = p["variable"], int(p["start_year"]), int(p["end_year"])
+    if not retrieve.is_external(code):  # NASA POWER: complete years only; solar from 1984
+        y0 = max(y0, 1984 if code.startswith("ALLSKY") else 1981)
+    elif var.get("first_year"):
+        y0 = max(y0, int(var["first_year"]))
+    if var.get("last_year"):
+        y1 = min(y1, int(var["last_year"]))
+    return y0, min(y1, power.LAST_FULL_YEAR)
+
+
+def data_check(p, var, series):
+    """Range-check and completeness report for one series -> (clean_series, report)."""
+    return quality.check(series, var.get("units"), *check_years(p, var))
+
+
+def render_check(qc):
+    color, icon, word = {"green": ("green", "✅", "Data check passed"),
+                         "amber": ("orange", "⚠️", "Data check: worth a look"),
+                         "red": ("red", "⛔", "Data check: incomplete record")}[qc["level"]]
+    st.badge(word, icon=icon, color=color)
+    st.caption(quality.headline(qc) + ".")
+    if qc["removed"]:
+        shown = ", ".join(f"{r['month']} ({r['value']:g})" for r in qc["removed"][:6])
+        st.caption(f"Removed as physically impossible (allowed {qc['bounds'][0]:g} to {qc['bounds'][1]:g}): "
+                   + shown + (" …" if len(qc["removed"]) > 6 else ""))
+
+
+def source_box(p, var, series, tag, heading=None, qc=None):
     """Prominent citation for one series, with a direct link to the source data and a download."""
     info = source_info(p, var, series)
     with st.container(border=True):
         st.markdown(f"##### 📚 Source{': ' + heading if heading else ''}")
+        if qc:
+            render_check(qc)
         st.markdown(f"**{info['title']}**")
         st.caption(info["detail"])
         st.caption("Cite as:")
@@ -553,6 +586,7 @@ def investigate(p, question=None, series=None, var=None):
     else:
         s = series
     var = var or var_info(p["variable"])
+    s, qc = data_check(p, var, s)  # range check + completeness, before any statistics
     res = analyze(s, p["season"], keep_cycle())
     m = res["metrics"]
     nb = neighbor_check(p, m["sen_slope_per_decade"], nb_series) if want_nb else None
@@ -563,6 +597,9 @@ def investigate(p, question=None, series=None, var=None):
     with left:
         st.pyplot(trend_figure(res, var["name"], var["units"], p["season"]))
     with right:
+        if qc["level"] == "red":
+            st.error(f"**Data check: incomplete record.** {quality.headline(qc)}. Treat the verdict below with "
+                     "caution.")
         if m["significant"]:
             st.success(f"**Verdict: a significant {m['direction']} trend.** The evidence holds up, Detective.")
         elif m["tests_agree"]:
@@ -587,6 +624,7 @@ def investigate(p, question=None, series=None, var=None):
             st.info(f"**Canvassing the neighbours:** {nb['same_direction']} of {nb['n']} surrounding points (~100 km) trend "
                     f"the same way; {nb['significant']} significantly.")
     ctx = dict(question=question, place=p["place"], season=p["season"], metrics=m, neighbors=nb, emergence=em,
+               data_check={k: qc[k] for k in ("level", "coverage", "longest_gap", "issues")},
                variable={k: var[k] for k in ("name", "units", "definition")}, variable_id=p["variable"])
     text, used_ai = _cached(_explain_cached, ctx)
     if m.get("seasonal_cycle_kept"):
@@ -598,7 +636,9 @@ def investigate(p, question=None, series=None, var=None):
         st.caption("The seasonal-cycle toggle has no effect here: one season gives one value per year, so there is "
                    "no cycle to keep.")
     if series is None:
-        source_box(p, var, s, "main")
+        source_box(p, var, s, "main", qc=qc)
+    else:
+        render_check(qc)
     st.markdown("#### 🛰️ The Planeteer's report")
     st.markdown(text)
     st.caption(("Wording by AI from the computed numbers. " if used_ai else "") +
@@ -622,6 +662,7 @@ def investigate(p, question=None, series=None, var=None):
         space_view.render(p, p["variable"], var["name"])
     with st.expander("🗂️ Case file: exact numbers and data"):
         st.json(m)
+        st.json({"data_check": qc})
         st.download_button("Download series (CSV)", res["series"].to_csv(), "series.csv")
 
     if not p.get("season"):
@@ -657,6 +698,8 @@ def render_compare(case, question=None):
     if ea is not None or eb is not None:
         raise ea if ea is not None else eb
     va, vb = var_info(pa["variable"]), var_info(pb["variable"])
+    sa, qa = data_check(pa, va, sa)
+    sb, qb = data_check(pb, vb, sb)
     same_units = pa["variable"] == pb["variable"] or (va["units"] == vb["units"] and bool(va["units"]))
     c = compare.compare(sa, sb, pa["season"], same_units, keep_cycle())
     la, lb = _label(pa, pb), _label(pb, pa)
@@ -749,9 +792,9 @@ def render_compare(case, question=None):
                    on_click=_push_followup, args=(solo,), width="stretch")
     s1, s2 = st.columns(2)
     with s1:
-        source_box(pa, va, sa, "a", heading=f"A: {la}")
+        source_box(pa, va, sa, "a", heading=f"A: {la}", qc=qa)
     with s2:
-        source_box(pb, vb, sb, "b", heading=f"B: {lb}")
+        source_box(pb, vb, sb, "b", heading=f"B: {lb}", qc=qb)
     with st.expander("🗂️ Case file: exact numbers"):
         st.json({"A": c["a_brief"], "B": c["b_brief"], "comparison": c["summary"]})
 
